@@ -4,13 +4,18 @@ const hostelSchema = new mongoose.Schema({
   name: {
     type: String,
     required: true,
-    unique: true,
     trim: true,
   },
   level: {
     type: Number,
     required: true,
     enum: [100, 200, 300, 400, 500],
+  },
+  gender: {
+    type: String,
+    required: true,
+    enum: ['male', 'female', 'mixed'],
+    lowercase: true,
   },
   totalRooms: {
     type: Number,

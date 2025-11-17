@@ -1,0 +1,15 @@
+POST /api/admin/students
+{
+  "firstName": "John",
+  "lastName": "Doe",
+  "matricNo": "STU20240001",
+  "email": "john.doe@university.edu",
+  "level": 100,
+  "gender": "male",  // ← Admin sets this
+  "college": "65f...",
+  "department": "65f..."
+}firstName,lastName,matricNo,email,level,gender,college,department
+John,Doe,STU20240001,john.doe@university.edu,100,male,65f1a2b3c4d5e6f7g8h9i0j1,65f1a2b3c4d5e6f7g8h9i0j2
+Jane,Smith,STU20240002,jane.smith@university.edu,100,female,65f1a2b3c4d5e6f7g8h9i0j1,65f1a2b3c4d5e6f7g8h9i0j3
+Michael,Johnson,STU20240003,michael.j@university.edu,200,male,65f1a2b3c4d5e6f7g8h9i0j4,65f1a2b3c4d5e6f7g8h9i0j5
+Sarah,Williams,STU20240004,sarah.w@university.edu,200,female,65f1a2b3c4d5e6f7g8h9i0j4,65f1a2b3c4d5e6f7g8h9i0j6

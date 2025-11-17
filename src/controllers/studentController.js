@@ -16,9 +16,16 @@ exports.getAvailableHostels = async (req, res) => {
   try {
     const student = req.user;
     
+    // Filter hostels by level and gender
+    // Students can only see hostels that match their gender or are mixed
+    const genderFilter = student.gender === 'male' 
+      ? { gender: { $in: ['male', 'mixed'] } }
+      : { gender: { $in: ['female', 'mixed'] } };
+    
     const hostels = await Hostel.find({
       level: student.level,
       isActive: true,
+      ...genderFilter
     }).populate('portersAssigned');
 
     res.status(200).json({

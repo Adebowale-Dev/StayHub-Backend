@@ -52,6 +52,12 @@ const validateStudent = [
   body('level')
     .isIn([100, 200, 300, 400, 500])
     .withMessage('Level must be 100, 200, 300, 400, or 500'),
+  body('gender')
+    .notEmpty()
+    .withMessage('Gender is required')
+    .isIn(['male', 'female'])
+    .withMessage('Gender must be either male or female')
+    .toLowerCase(),
   body('college')
     .notEmpty()
     .withMessage('College is required')
@@ -127,6 +133,12 @@ const validateHostel = [
   body('level')
     .isIn([100, 200, 300, 400, 500])
     .withMessage('Level must be 100, 200, 300, 400, or 500'),
+  body('gender')
+    .notEmpty()
+    .withMessage('Gender is required')
+    .isIn(['male', 'female', 'mixed'])
+    .withMessage('Gender must be male, female, or mixed')
+    .toLowerCase(),
   body('totalRooms')
     .isInt({ min: 1 })
     .withMessage('Total rooms must be at least 1'),

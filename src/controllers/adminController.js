@@ -51,19 +51,255 @@ exports.deleteCollege = async (req, res) => {
 // Department Management
 exports.createDepartment = async (req, res) => {
   try {
-    const department = await Department.create(req.body);
-    res.status(201).json({ success: true, data: department });
+    const { collegeId } = req.params;
+    const { name, code, description } = req.body;
+
+    if (!name || !code) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Department name and code are required' 
+      });
+    }
+
+    const college = await College.findById(collegeId);
+    if (!college) {
+      return res.status(404).json({ success: false, message: 'College not found' });
+    }
+
+    // Check for duplicate department code in this college
+    const existingDept = await Department.findOne({
+      college: collegeId,
+      $or: [
+        { code: code.toUpperCase() },
+        { name: name }
+      ]
+    });
+
+    if (existingDept) {
+      return res.status(409).json({
+        success: false,
+        message: 'Department with this name or code already exists in this college'
+      });
+    }
+
+    // Create department
+    const department = await Department.create({
+      name,
+      code: code.toUpperCase(),
+      description: description || '',
+      college: collegeId,
+      isActive: true
+    });
+
+    res.status(201).json({ 
+      success: true, 
+      message: 'Department added successfully',
+      data: {
+        department,
+        college: {
+          id: college._id,
+          name: college.name,
+          code: college.code
+        }
+      }
+    });
   } catch (error) {
+    console.error('createDepartment error:', error);
     res.status(400).json({ success: false, message: error.message });
   }
 };
 
 exports.getDepartments = async (req, res) => {
   try {
-    const departments = await Department.find({ isActive: true }).populate('college');
-    res.status(200).json({ success: true, data: departments });
+    const { collegeId } = req.params;
+
+    const college = await College.findById(collegeId);
+
+    if (!college) {
+      return res.status(404).json({ success: false, message: 'College not found' });
+    }
+
+    // Find all departments for this college
+    const departments = await Department.find({ 
+      college: collegeId,
+      isActive: true 
+    }).lean();
+
+    // Convert ObjectId to mongoose ObjectId for aggregation
+    const mongoose = require('mongoose');
+    const collegeObjectId = mongoose.Types.ObjectId.isValid(collegeId) 
+      ? new mongoose.Types.ObjectId(collegeId) 
+      : collegeId;
+
+    // Get student counts for all departments in one query
+    const studentCounts = await Student.aggregate([
+      {
+        $match: { 
+          college: collegeObjectId,
+          isActive: true 
+        }
+      },
+      {
+        $group: {
+          _id: '$department',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Create department count map
+    const deptCountMap = {};
+    studentCounts.forEach(item => {
+      if (item._id) {
+        deptCountMap[item._id.toString()] = item.count;
+      }
+    });
+
+    // Assign student counts to departments
+    const departmentsWithCounts = departments.map(dept => ({
+      ...dept,
+      studentCount: deptCountMap[dept._id.toString()] || 0
+    }));
+
+    res.status(200).json({ 
+      success: true, 
+      data: {
+        college: {
+          id: college._id,
+          name: college.name,
+          code: college.code
+        },
+        departments: departmentsWithCounts,
+        total: departmentsWithCounts.length
+      }
+    });
   } catch (error) {
+    console.error('getDepartments error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateDepartment = async (req, res) => {
+  try {
+    const { collegeId, deptId } = req.params;
+    const { name, code, description, isActive } = req.body;
+
+    const college = await College.findById(collegeId);
+
+    if (!college) {
+      return res.status(404).json({ success: false, message: 'College not found' });
+    }
+
+    const department = await Department.findOne({ 
+      _id: deptId, 
+      college: collegeId 
+    });
+
+    if (!department) {
+      return res.status(404).json({ success: false, message: 'Department not found' });
+    }
+
+    // Check for duplicate name/code if changing
+    if (name || code) {
+      const duplicate = await Department.findOne({
+        _id: { $ne: deptId },
+        college: collegeId,
+        $or: [
+          ...(name ? [{ name }] : []),
+          ...(code ? [{ code: code.toUpperCase() }] : [])
+        ]
+      });
+
+      if (duplicate) {
+        return res.status(409).json({
+          success: false,
+          message: 'Another department with this name or code already exists in this college'
+        });
+      }
+    }
+
+    // Update fields
+    if (name !== undefined) department.name = name;
+    if (code !== undefined) department.code = code.toUpperCase();
+    if (description !== undefined) department.description = description;
+    if (isActive !== undefined) department.isActive = isActive;
+
+    await department.save();
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'Department updated successfully',
+      data: department 
+    });
+  } catch (error) {
+    console.error('updateDepartment error:', error);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteDepartment = async (req, res) => {
+  try {
+    const { collegeId, deptId } = req.params;
+    const { force = 'false' } = req.query;
+
+    const college = await College.findById(collegeId);
+
+    if (!college) {
+      return res.status(404).json({ success: false, message: 'College not found' });
+    }
+
+    const department = await Department.findOne({ 
+      _id: deptId, 
+      college: collegeId 
+    });
+
+    if (!department) {
+      return res.status(404).json({ success: false, message: 'Department not found' });
+    }
+
+    // Check if department has students
+    const studentCount = await Student.countDocuments({
+      college: collegeId,
+      department: deptId
+    });
+
+    if (studentCount > 0 && force !== 'true') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete department with ${studentCount} students. Use ?force=true to force delete.`,
+        studentCount
+      });
+    }
+
+    // If force delete, remove all students in this department
+    if (force === 'true' && studentCount > 0) {
+      await Student.deleteMany({
+        college: collegeId,
+        department: deptId
+      });
+    }
+
+    const deletedDept = {
+      id: department._id,
+      name: department.name,
+      code: department.code
+    };
+
+    await Department.findByIdAndDelete(deptId);
+
+    res.status(200).json({ 
+      success: true, 
+      message: force === 'true' && studentCount > 0 
+        ? `Department and ${studentCount} students deleted successfully`
+        : 'Department deleted successfully',
+      data: {
+        deletedDepartment: deletedDept,
+        deletedStudents: force === 'true' ? studentCount : 0
+      }
+    });
+  } catch (error) {
+    console.error('deleteDepartment error:', error);
+    res.status(400).json({ success: false, message: error.message });
   }
 };
 
@@ -93,6 +329,7 @@ exports.bulkUploadStudents = async (req, res) => {
           matricNo: row.matricNo,
           email: row.email,
           level: parseInt(row.level),
+          gender: row.gender ? row.gender.toLowerCase() : 'male',
           college: row.college,
           department: row.department,
           password: generateDefaultPassword(row.firstName),
@@ -130,9 +367,13 @@ exports.getStudents = async (req, res) => {
     if (paymentStatus) query.paymentStatus = paymentStatus;
 
     const students = await Student.find(query)
-      .populate('college department assignedHostel assignedRoom')
+      .populate('college', 'name code')
+      .populate('department', 'name code')
+      .populate('assignedHostel', 'name code')
+      .populate('assignedRoom', 'roomNumber')
       .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .skip((page - 1) * limit)
+      .sort({ createdAt: -1 });
     
     const count = await Student.countDocuments(query);
     
@@ -148,14 +389,391 @@ exports.getStudents = async (req, res) => {
   }
 };
 
+exports.getMaleStudents = async (req, res) => {
+  try {
+    const { level, college, department, paymentStatus, page = 1, limit = 50 } = req.query;
+    const query = { isActive: true, gender: 'male' };
+    
+    if (level) query.level = level;
+    if (college) query.college = college;
+    if (department) query.department = department;
+    if (paymentStatus) query.paymentStatus = paymentStatus;
+
+    const students = await Student.find(query)
+      .populate('college', 'name code')
+      .populate('department', 'name code')
+      .populate('assignedHostel', 'name code')
+      .populate('assignedRoom', 'roomNumber')
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .sort({ createdAt: -1 });
+    
+    const count = await Student.countDocuments(query);
+    
+    res.status(200).json({
+      success: true,
+      gender: 'male',
+      data: students,
+      totalPages: Math.ceil(count / limit),
+      currentPage: parseInt(page),
+      total: count,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getFemaleStudents = async (req, res) => {
+  try {
+    const { level, college, department, paymentStatus, page = 1, limit = 50 } = req.query;
+    const query = { isActive: true, gender: 'female' };
+    
+    if (level) query.level = level;
+    if (college) query.college = college;
+    if (department) query.department = department;
+    if (paymentStatus) query.paymentStatus = paymentStatus;
+
+    const students = await Student.find(query)
+      .populate('college', 'name code')
+      .populate('department', 'name code')
+      .populate('assignedHostel', 'name code')
+      .populate('assignedRoom', 'roomNumber')
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .sort({ createdAt: -1 });
+    
+    const count = await Student.countDocuments(query);
+    
+    res.status(200).json({
+      success: true,
+      gender: 'female',
+      data: students,
+      totalPages: Math.ceil(count / limit),
+      currentPage: parseInt(page),
+      total: count,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getStudentsByCollege = async (req, res) => {
+  try {
+    const { collegeId } = req.params;
+    const { level, department, paymentStatus, page = 1, limit = 50 } = req.query;
+
+    const college = await College.findById(collegeId);
+    if (!college) {
+      return res.status(404).json({ success: false, message: 'College not found' });
+    }
+
+    const query = { isActive: true, college: collegeId };
+    
+    if (level) query.level = level;
+    if (department) query.department = department;
+    if (paymentStatus) query.paymentStatus = paymentStatus;
+
+    const students = await Student.find(query)
+      .populate('college', 'name code')
+      .populate('department', 'name code')
+      .populate('assignedHostel', 'name code')
+      .populate('assignedRoom', 'roomNumber')
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .sort({ createdAt: -1 });
+    
+    const count = await Student.countDocuments(query);
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        college: {
+          id: college._id,
+          name: college.name,
+          code: college.code
+        },
+        students,
+        totalPages: Math.ceil(count / limit),
+        currentPage: parseInt(page),
+        total: count
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getStudentsByDepartment = async (req, res) => {
+  try {
+    const { collegeId, deptId } = req.params;
+    const { level, paymentStatus, page = 1, limit = 50 } = req.query;
+
+    const college = await College.findById(collegeId);
+    if (!college) {
+      return res.status(404).json({ success: false, message: 'College not found' });
+    }
+
+    const department = await Department.findOne({ 
+      _id: deptId, 
+      college: collegeId 
+    });
+    
+    if (!department) {
+      return res.status(404).json({ success: false, message: 'Department not found' });
+    }
+
+    const query = { isActive: true, college: collegeId, department: deptId };
+    
+    if (level) query.level = level;
+    if (paymentStatus) query.paymentStatus = paymentStatus;
+
+    const students = await Student.find(query)
+      .populate('college', 'name code')
+      .populate('department', 'name code')
+      .populate('assignedHostel', 'name code')
+      .populate('assignedRoom', 'roomNumber')
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .sort({ createdAt: -1 });
+    
+    const count = await Student.countDocuments(query);
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        college: {
+          id: college._id,
+          name: college.name,
+          code: college.code
+        },
+        department: {
+          id: department._id,
+          name: department.name,
+          code: department.code
+        },
+        students,
+        totalPages: Math.ceil(count / limit),
+        currentPage: parseInt(page),
+        total: count
+      }
+    });
+  } catch (error) {
+    console.error('getStudentsByDepartment error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateStudent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = { ...req.body };
+
+    // Don't allow direct password updates through this endpoint
+    if (updateData.password) {
+      delete updateData.password;
+    }
+
+    // Don't allow role changes
+    if (updateData.role) {
+      delete updateData.role;
+    }
+
+    // If changing gender, verify no active hostel assignment with wrong gender
+    if (updateData.gender) {
+      updateData.gender = updateData.gender.toLowerCase();
+      if (!['male', 'female'].includes(updateData.gender)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Gender must be either male or female'
+        });
+      }
+    }
+
+    const student = await Student.findById(id);
+
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    // If changing gender and student has hostel assignment, verify compatibility
+    if (updateData.gender && updateData.gender !== student.gender && student.assignedHostel) {
+      const hostel = await Hostel.findById(student.assignedHostel);
+      if (hostel && hostel.gender !== 'mixed') {
+        const isCompatible = (
+          (updateData.gender === 'male' && hostel.gender === 'male') ||
+          (updateData.gender === 'female' && hostel.gender === 'female')
+        );
+        
+        if (!isCompatible) {
+          return res.status(400).json({
+            success: false,
+            message: `Cannot change gender while assigned to a ${hostel.gender} hostel. Please unassign from hostel first.`
+          });
+        }
+      }
+    }
+
+    // Check if matricNo is being changed and if it's unique
+    if (updateData.matricNo && updateData.matricNo !== student.matricNo) {
+      const existingStudent = await Student.findOne({ 
+        matricNo: updateData.matricNo,
+        _id: { $ne: id }
+      });
+
+      if (existingStudent) {
+        return res.status(409).json({
+          success: false,
+          message: 'A student with this matric number already exists'
+        });
+      }
+    }
+
+    // Check if email is being changed and if it's unique
+    if (updateData.email && updateData.email !== student.email) {
+      const existingStudent = await Student.findOne({ 
+        email: updateData.email,
+        _id: { $ne: id }
+      });
+
+      if (existingStudent) {
+        return res.status(409).json({
+          success: false,
+          message: 'A student with this email already exists'
+        });
+      }
+    }
+
+    // Update student
+    const updatedStudent = await Student.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    )
+      .populate('college', 'name code')
+      .populate('department', 'name code')
+      .populate('assignedHostel', 'name code')
+      .populate('assignedRoom', 'roomNumber');
+
+    res.status(200).json({
+      success: true,
+      message: 'Student updated successfully',
+      data: updatedStudent
+    });
+  } catch (error) {
+    console.error('updateStudent error:', error);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteStudent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { permanent = 'false' } = req.query;
+
+    const student = await Student.findById(id);
+
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    if (permanent === 'true') {
+      // Permanent deletion
+      await Student.findByIdAndDelete(id);
+
+      res.status(200).json({
+        success: true,
+        message: 'Student permanently deleted',
+        data: {
+          id: student._id,
+          matricNo: student.matricNo,
+          name: `${student.firstName} ${student.lastName}`
+        }
+      });
+    } else {
+      // Soft delete (set isActive to false)
+      student.isActive = false;
+      await student.save();
+
+      res.status(200).json({
+        success: true,
+        message: 'Student deactivated successfully',
+        data: student
+      });
+    }
+  } catch (error) {
+    console.error('deleteStudent error:', error);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 // Hostel Management
 exports.createHostel = async (req, res) => {
   try {
+    console.log('Creating hostel with data:', req.body);
+    
+    // Validate required fields
+    const { name, level, gender, totalRooms } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Hostel name is required' 
+      });
+    }
+    
+    if (!level) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Level is required' 
+      });
+    }
+    
+    if (![100, 200, 300, 400, 500].includes(Number(level))) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Level must be 100, 200, 300, 400, or 500' 
+      });
+    }
+    
+    if (!gender) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Gender is required' 
+      });
+    }
+    
+    if (!['male', 'female', 'mixed'].includes(gender.toLowerCase())) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Gender must be male, female, or mixed' 
+      });
+    }
+    
+    if (!totalRooms || Number(totalRooms) < 1) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Total rooms must be at least 1' 
+      });
+    }
+    
     const hostel = await Hostel.create(req.body);
     cacheService.del(cacheService.cacheKeys.hostelsByLevel(hostel.level));
-    res.status(201).json({ success: true, data: hostel });
+    
+    res.status(201).json({ 
+      success: true, 
+      message: 'Hostel created successfully',
+      data: hostel 
+    });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    console.error('Create hostel error:', error);
+    res.status(400).json({ 
+      success: false, 
+      message: error.message,
+      error: error.errors ? Object.keys(error.errors).map(key => ({
+        field: key,
+        message: error.errors[key].message
+      })) : undefined
+    });
   }
 };
 
@@ -165,6 +783,157 @@ exports.getHostels = async (req, res) => {
     res.status(200).json({ success: true, data: hostels });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateHostel = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = { ...req.body };
+
+    const hostel = await Hostel.findById(id);
+
+    if (!hostel) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Hostel not found' 
+      });
+    }
+
+    // Check if name is being changed and if it's unique
+    if (updateData.name && updateData.name !== hostel.name) {
+      const existingHostel = await Hostel.findOne({ 
+        name: updateData.name,
+        _id: { $ne: id }
+      });
+
+      if (existingHostel) {
+        return res.status(409).json({
+          success: false,
+          message: 'A hostel with this name already exists'
+        });
+      }
+    }
+
+    // Validate level if provided
+    if (updateData.level && ![100, 200, 300, 400, 500].includes(Number(updateData.level))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Level must be 100, 200, 300, 400, or 500'
+      });
+    }
+
+    // Validate gender if provided
+    if (updateData.gender && !['male', 'female', 'mixed'].includes(updateData.gender.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Gender must be male, female, or mixed'
+      });
+    }
+
+    // Validate totalRooms if provided
+    if (updateData.totalRooms && Number(updateData.totalRooms) < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Total rooms must be at least 1'
+      });
+    }
+
+    const updatedHostel = await Hostel.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('portersAssigned');
+
+    // Clear cache
+    cacheService.del(cacheService.cacheKeys.hostelsByLevel(hostel.level));
+    if (updateData.level && updateData.level !== hostel.level) {
+      cacheService.del(cacheService.cacheKeys.hostelsByLevel(updateData.level));
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Hostel updated successfully',
+      data: updatedHostel
+    });
+  } catch (error) {
+    console.error('Update hostel error:', error);
+    res.status(400).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+};
+
+exports.deleteHostel = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { permanent = 'false' } = req.query;
+
+    console.log('DELETE hostel request - ID:', id, 'Permanent:', permanent);
+
+    const hostel = await Hostel.findById(id);
+
+    if (!hostel) {
+      console.log('Hostel not found');
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Hostel not found' 
+      });
+    }
+
+    console.log('Hostel found:', hostel.name);
+
+    if (permanent === 'true') {
+      // Permanent deletion - delete all associated rooms and bunks
+      const rooms = await Room.find({ hostel: id });
+      console.log('Deleting', rooms.length, 'rooms');
+      
+      for (const room of rooms) {
+        // Delete bunks associated with this room
+        await Bunk.deleteMany({ room: room._id });
+      }
+      
+      // Delete all rooms
+      await Room.deleteMany({ hostel: id });
+      
+      // Delete the hostel
+      await Hostel.findByIdAndDelete(id);
+
+      // Clear cache
+      cacheService.del(cacheService.cacheKeys.hostelsByLevel(hostel.level));
+
+      console.log('Hostel permanently deleted');
+      return res.status(200).json({
+        success: true,
+        message: `Hostel and ${rooms.length} rooms deleted permanently`,
+        data: {
+          id: hostel._id,
+          name: hostel.name,
+          deletedRooms: rooms.length
+        }
+      });
+    } else {
+      // Soft delete
+      hostel.isActive = false;
+      await hostel.save();
+
+      // Clear cache
+      cacheService.del(cacheService.cacheKeys.hostelsByLevel(hostel.level));
+
+      console.log('Hostel soft deleted');
+      return res.status(200).json({
+        success: true,
+        message: 'Hostel deactivated successfully',
+        data: hostel
+      });
+    }
+  } catch (error) {
+    console.error('Delete hostel error:', error);
+    return res.status(400).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 };
 
@@ -203,6 +972,117 @@ exports.getRooms = async (req, res) => {
     const rooms = await Room.find(query).populate('hostel');
     res.status(200).json({ success: true, data: rooms });
   } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateRoom = async (req, res) => {
+  try {
+    console.log('Updating room with ID:', req.params.id);
+    console.log('Update data:', req.body);
+
+    const { roomNumber, hostel, capacity, level } = req.body;
+    
+    // Check if room exists
+    const existingRoom = await Room.findById(req.params.id);
+    if (!existingRoom) {
+      console.log('Room not found:', req.params.id);
+      return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+
+    // Check if hostel exists if hostel is being updated
+    if (hostel && hostel !== existingRoom.hostel.toString()) {
+      const hostelExists = await Hostel.findById(hostel);
+      if (!hostelExists) {
+        return res.status(404).json({ success: false, message: 'Hostel not found' });
+      }
+    }
+
+    // If capacity is changing, we need to manage bunks
+    const oldCapacity = existingRoom.capacity;
+    const newCapacity = capacity || oldCapacity;
+
+    const updatedRoom = await Room.findByIdAndUpdate(
+      req.params.id,
+      { roomNumber, hostel, capacity: newCapacity, level },
+      { new: true, runValidators: true }
+    ).populate('hostel');
+
+    // Handle bunk changes if capacity changed
+    if (oldCapacity !== newCapacity) {
+      const oldBunks = Math.floor(oldCapacity / 2);
+      const newBunks = Math.floor(newCapacity / 2);
+
+      if (newBunks > oldBunks) {
+        // Add more bunks
+        const bunksToAdd = [];
+        for (let i = oldBunks + 1; i <= newBunks; i++) {
+          bunksToAdd.push({
+            bunkNumber: `B${i}`,
+            room: updatedRoom._id,
+          });
+        }
+        await Bunk.insertMany(bunksToAdd);
+      } else if (newBunks < oldBunks) {
+        // Remove excess bunks (only if they're not occupied)
+        const bunksToRemove = await Bunk.find({
+          room: updatedRoom._id,
+          $or: [{ upperOccupant: null }, { lowerOccupant: null }]
+        }).sort({ bunkNumber: -1 }).limit(oldBunks - newBunks);
+        
+        for (const bunk of bunksToRemove) {
+          if (!bunk.upperOccupant && !bunk.lowerOccupant) {
+            await Bunk.findByIdAndDelete(bunk._id);
+          }
+        }
+      }
+    }
+
+    // Clear cache
+    cacheService.del(cacheService.cacheKeys.roomsByHostel(updatedRoom.hostel._id));
+
+    console.log('Room updated successfully:', updatedRoom);
+    res.status(200).json({ success: true, data: updatedRoom });
+  } catch (error) {
+    console.error('Update room error:', error);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteRoom = async (req, res) => {
+  try {
+    console.log('Deleting room with ID:', req.params.id);
+
+    const room = await Room.findById(req.params.id);
+    if (!room) {
+      console.log('Room not found:', req.params.id);
+      return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+
+    // Check if room has occupants
+    if (room.currentOccupants > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Cannot delete room with current occupants. Please reassign students first.' 
+      });
+    }
+
+    // Delete all bunks associated with this room
+    await Bunk.deleteMany({ room: room._id });
+    
+    // Permanently delete the room
+    await Room.findByIdAndDelete(req.params.id);
+    console.log('Room permanently deleted:', req.params.id);
+
+    // Clear cache
+    cacheService.del(cacheService.cacheKeys.roomsByHostel(room.hostel));
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'Room permanently deleted'
+    });
+  } catch (error) {
+    console.error('Delete room error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -265,6 +1145,86 @@ exports.getDashboardStats = async (req, res) => {
       },
     });
   } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// College Statistics
+exports.getCollegeStatistics = async (req, res) => {
+  try {
+    const colleges = await College.find({ isActive: true }).lean();
+
+    // Get all student counts in one aggregation
+    const studentCounts = await Student.aggregate([
+      {
+        $match: { isActive: true }
+      },
+      {
+        $group: {
+          _id: '$college',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Get department counts per college
+    const departmentCounts = await Department.aggregate([
+      {
+        $match: { isActive: true }
+      },
+      {
+        $group: {
+          _id: '$college',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const totalStudents = await Student.countDocuments({ isActive: true });
+    const totalDepartments = await Department.countDocuments({ isActive: true });
+
+    // Create college count maps
+    const collegeStudentMap = {};
+    studentCounts.forEach((item) => {
+      collegeStudentMap[item._id?.toString()] = item.count;
+    });
+
+    const collegeDeptMap = {};
+    departmentCounts.forEach((item) => {
+      collegeDeptMap[item._id?.toString()] = item.count;
+    });
+
+    const collegesBreakdown = [];
+
+    for (const college of colleges) {
+      const studentCount = collegeStudentMap[college._id.toString()] || 0;
+      const deptCount = collegeDeptMap[college._id.toString()] || 0;
+
+      collegesBreakdown.push({
+        id: college._id,
+        name: college.name,
+        code: college.code,
+        departmentCount: deptCount,
+        studentCount: studentCount,
+        isActive: college.isActive,
+      });
+    }
+
+    const statistics = {
+      totalColleges: colleges.length,
+      activeColleges: colleges.filter((c) => c.isActive).length,
+      inactiveColleges: colleges.filter((c) => !c.isActive).length,
+      totalDepartments: totalDepartments,
+      totalStudents: totalStudents,
+      collegesBreakdown: collegesBreakdown,
+    };
+
+    res.status(200).json({
+      success: true,
+      data: statistics,
+    });
+  } catch (error) {
+    console.error('getCollegeStatistics error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

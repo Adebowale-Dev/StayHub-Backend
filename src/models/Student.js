@@ -35,6 +35,12 @@ const studentSchema = new mongoose.Schema({
     required: true,
     enum: [100, 200, 300, 400, 500],
   },
+  gender: {
+    type: String,
+    required: true,
+    enum: ['male', 'female'],
+    lowercase: true,
+  },
   college: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'College',

@@ -29,6 +29,19 @@ app.use(cors()); // Enable CORS
 app.use(express.json()); // Body parser
 app.use(express.urlencoded({ extended: true }));
 
+// Request logging middleware - Log all incoming requests
+app.use((req, res, next) => {
+  const timestamp = new Date().toISOString();
+  console.log(`
+╔════════════════════════════════════════════════════════════
+║ ${timestamp}
+║ ${req.method} ${req.originalUrl}
+║ Body: ${JSON.stringify(req.body, null, 2)}
+╚════════════════════════════════════════════════════════════
+  `);
+  next();
+});
+
 // Swagger Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   customCss: '.swagger-ui .topbar { display: none }',

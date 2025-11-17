@@ -5,6 +5,7 @@ const Admin = require("./src/models/Admin");
 const College = require("./src/models/College");
 const Department = require("./src/models/Department");
 const Student = require("./src/models/Student");
+const Hostel = require("./src/models/Hostel");
 
 // College and Department mappings (Bowen University)
 const collegesAndDepartments = {
@@ -87,15 +88,20 @@ const collegesAndDepartments = {
   },
 };
 
-// Student names for realistic data
-const firstNames = [
-  "Adebayo", "Chioma", "Emmanuel", "Fatima", "Ibrahim",
-  "Jennifer", "Kunle", "Loveth", "Muhammad", "Ngozi",
-  "Oluwatobi", "Peace", "Samuel", "Temitope", "Uche",
-  "Victoria", "Williams", "Yetunde", "Zainab", "Ahmed",
-  "Blessing", "Chinedu", "Daniel", "Esther", "Felix",
-  "Grace", "Hassan", "Ifeoma", "Joshua", "Kemi",
+// Student names for realistic data (with gender)
+const maleNames = [
+  "Adebayo", "Emmanuel", "Ibrahim", "Kunle", "Muhammad",
+  "Oluwatobi", "Samuel", "Uche", "Williams", "Ahmed",
+  "Chinedu", "Daniel", "Felix", "Hassan", "Joshua",
 ];
+
+const femaleNames = [
+  "Chioma", "Fatima", "Jennifer", "Loveth", "Ngozi",
+  "Peace", "Temitope", "Victoria", "Yetunde", "Zainab",
+  "Blessing", "Esther", "Grace", "Ifeoma", "Kemi",
+];
+
+const firstNames = [...maleNames, ...femaleNames];
 
 const lastNames = [
   "Adeyemi", "Bello", "Chukwu", "Danjuma", "Eze",
@@ -152,6 +158,7 @@ async function connectDB() {
 async function clearDatabase() {
   console.log("\n🗑️  Clearing database...");
   await Student.deleteMany({});
+  await Hostel.deleteMany({});
   await Department.deleteMany({});
   await College.deleteMany({});
   await Admin.deleteMany({});
@@ -267,6 +274,9 @@ async function generateStudents() {
         let enrollmentYear = 2022;
         let matricNo = generateMatricNo(enrollmentYear, department.code, departmentCounters[department.code]);
         let email = generateEmail(firstName, lastName, matricNo);
+        
+        // Determine gender based on first name
+        let gender = maleNames.includes(firstName) ? 'male' : 'female';
 
         // Special case 1: First student in Computer Science department
         if (department.code === "CSC" && isFirstComputerScienceStudent) {
@@ -275,6 +285,7 @@ async function generateStudents() {
           matricNo = "BU22CSC1005";
           email = "muhammedabiodun42@gmail.com"; // Keep custom email
           level = 400;
+          gender = 'male';
           isFirstComputerScienceStudent = false;
           console.log(`   🎯 Special student: ${firstName} ${lastName} - ${matricNo}`);
         }
@@ -284,6 +295,7 @@ async function generateStudents() {
           lastName = "Muhammed";
           email = "Mustapha.muhammed@bowen.edu.ng"; // Keep custom email
           level = randomElement(levels);
+          gender = 'male';
           isFirstAccountingStudent = false;
           console.log(`   🎯 Special student: ${firstName} ${lastName} - ${matricNo}`);
         }
@@ -298,6 +310,7 @@ async function generateStudents() {
           email: email,
           password: studentPasswordHash, // Password is firstName, hashed
           level: level,
+          gender: gender, // Add gender field
           college: college._id, // Add college reference
           department: department._id,
           roommates: [],
