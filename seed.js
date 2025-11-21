@@ -6,6 +6,11 @@ const College = require("./src/models/College");
 const Department = require("./src/models/Department");
 const Student = require("./src/models/Student");
 const Hostel = require("./src/models/Hostel");
+const Porter = require("./src/models/Porter");
+const Room = require("./src/models/Room");
+const Bunk = require("./src/models/Bunk");
+const Payment = require("./src/models/Payment");
+const PaymentConfig = require("./src/models/PaymentConfig");
 
 // College and Department mappings (Bowen University)
 const collegesAndDepartments = {
@@ -157,12 +162,49 @@ async function connectDB() {
  */
 async function clearDatabase() {
   console.log("\n🗑️  Clearing database...");
+  
+  // Clear all collections in proper order (to handle dependencies)
+  const paymentConfigCount = await PaymentConfig.countDocuments();
+  await PaymentConfig.deleteMany({});
+  console.log(`   ✓ Deleted ${paymentConfigCount} payment configs`);
+  
+  const paymentCount = await Payment.countDocuments();
+  await Payment.deleteMany({});
+  console.log(`   ✓ Deleted ${paymentCount} payments`);
+  
+  const bunkCount = await Bunk.countDocuments();
+  await Bunk.deleteMany({});
+  console.log(`   ✓ Deleted ${bunkCount} bunks`);
+  
+  const roomCount = await Room.countDocuments();
+  await Room.deleteMany({});
+  console.log(`   ✓ Deleted ${roomCount} rooms`);
+  
+  const studentCount = await Student.countDocuments();
   await Student.deleteMany({});
+  console.log(`   ✓ Deleted ${studentCount} students`);
+  
+  const hostelCount = await Hostel.countDocuments();
   await Hostel.deleteMany({});
+  console.log(`   ✓ Deleted ${hostelCount} hostels`);
+  
+  const porterCount = await Porter.countDocuments();
+  await Porter.deleteMany({});
+  console.log(`   ✓ Deleted ${porterCount} porters`);
+  
+  const deptCount = await Department.countDocuments();
   await Department.deleteMany({});
+  console.log(`   ✓ Deleted ${deptCount} departments`);
+  
+  const collegeCount = await College.countDocuments();
   await College.deleteMany({});
+  console.log(`   ✓ Deleted ${collegeCount} colleges`);
+  
+  const adminCount = await Admin.countDocuments();
   await Admin.deleteMany({});
-  console.log("✅ Database cleared");
+  console.log(`   ✓ Deleted ${adminCount} admins`);
+  
+  console.log("✅ Database cleared - All collections empty");
 }
 
 /**
@@ -228,6 +270,38 @@ async function createAdmin() {
   console.log(" Password: Adebowale2001");
   
   return admin;
+}
+
+/**
+ * Create porter account
+ */
+async function createPorter() {
+  console.log("\n👮 Creating porter account...");
+
+  const existingPorter = await Porter.findOne({ email: "porter@stayhub.com" });
+  
+  if (existingPorter) {
+    console.log("⚠️  Porter already exists");
+    return existingPorter;
+  }
+
+  const porter = await Porter.create({
+    email: "porter@stayhub.com",
+    password: "Porter123",
+    firstName: "John",
+    lastName: "Porter",
+    phone: "08012345678",
+    status: "approved",
+    approved: true,
+    approvedDate: new Date(),
+    firstLogin: false,
+  });
+
+  console.log("✅ Porter created");
+  console.log(" Email: porter@stayhub.com");
+  console.log(" Password: Porter123");
+  
+  return porter;
 }
 
 /**
@@ -348,12 +422,14 @@ async function seed() {
     await clearDatabase();
     await seedColleges();
     await createAdmin();
+    await createPorter();
     const students = await generateStudents();
 
     console.log("\n" + "=".repeat(50));
     console.log("✅ Seed completed successfully!\n");
-    console.log("📝 Summary:");
+    console.log("📋 Summary:");
     console.log(`   - Admin: adebowale235@gmail.com (password: Adebowale2001)`);
+    console.log(`   - Porter: porter@stayhub.com (password: Porter123)`);
     console.log(`   - Colleges: 7 colleges created`);
     console.log(`   - Departments: All departments created with codes`);
     console.log(`   - Students: ${students.length} students created`);

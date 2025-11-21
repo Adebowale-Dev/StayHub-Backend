@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const adminController = require('../controllers/adminController');
+const paymentController = require('../controllers/paymentController');
 const { protect } = require('../middlewares/authMiddleware');
 const { adminOnly } = require('../middlewares/roleMiddleware');
 const {
@@ -1341,5 +1342,109 @@ router.post('/porters/approve', adminController.approvePorter);
  *         description: List of all porters
  */
 router.get('/porters', adminController.getPorters);
+
+// Payment Management
+/**
+ * @swagger
+ * /api/admin/payment/set-amount:
+ *   post:
+ *     summary: Set hostel payment amount
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - amount
+ *             properties:
+ *               amount:
+ *                 type: number
+ *                 example: 50000
+ *                 description: Hostel payment amount in Naira
+ *               semester:
+ *                 type: string
+ *                 example: "First Semester"
+ *               academicYear:
+ *                 type: string
+ *                 example: "2024/2025"
+ *     responses:
+ *       200:
+ *         description: Payment amount set successfully
+ *       400:
+ *         description: Invalid amount
+ */
+router.post('/payment/set-amount', paymentController.setPaymentAmount);
+
+/**
+ * @swagger
+ * /api/admin/payment/amount:
+ *   get:
+ *     summary: Get current hostel payment amount
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Current payment amount
+ *       404:
+ *         description: Payment amount not set
+ */
+router.get('/payment/amount', paymentController.getPaymentAmount);
+
+/**
+ * @swagger
+ * /api/admin/payment/stats:
+ *   get:
+ *     summary: Get payment statistics
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Payment statistics
+ */
+router.get('/payment/stats', paymentController.getPaymentStats);
+
+/**
+ * @swagger
+ * /api/admin/payments:
+ *   get:
+ *     summary: Get all payments
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [pending, completed, failed, cancelled]
+ *       - in: query
+ *         name: semester
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: academicYear
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: number
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: number
+ *           default: 50
+ *     responses:
+ *       200:
+ *         description: List of all payments
+ */
+router.get('/payments', paymentController.getAllPayments);
 
 module.exports = router;
