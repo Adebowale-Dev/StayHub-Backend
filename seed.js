@@ -290,16 +290,20 @@ async function createPorter() {
     password: "Porter123",
     firstName: "John",
     lastName: "Porter",
-    phone: "08012345678",
-    status: "approved",
+    phoneNumber: "08012345678",
+    employeeId: "EMP001",
+    joinedDate: new Date("2024-01-15"),
+    status: "active",
     approved: true,
     approvedDate: new Date(),
+    shiftSchedule: "Day Shift (8AM - 4PM)",
     firstLogin: false,
   });
 
   console.log("✅ Porter created");
   console.log(" Email: porter@stayhub.com");
   console.log(" Password: Porter123");
+  console.log(" Employee ID: EMP001");
   
   return porter;
 }

@@ -23,7 +23,7 @@ const porterSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  phone: {
+  phoneNumber: {
     type: String,
     trim: true,
   },
@@ -31,10 +31,22 @@ const porterSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Hostel',
   },
+  employeeId: {
+    type: String,
+    unique: true,
+    sparse: true, // Allows null values while maintaining uniqueness
+  },
+  joinedDate: {
+    type: Date,
+  },
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected', 'suspended'],
+    enum: ['pending', 'approved', 'rejected', 'suspended', 'active'],
     default: 'pending',
+  },
+  shiftSchedule: {
+    type: String,
+    trim: true,
   },
   approved: {
     type: Boolean,
@@ -69,6 +81,8 @@ const porterSchema = new mongoose.Schema({
   },
 }, {
   timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true },
 });
 
 // Hash password before saving
@@ -84,6 +98,11 @@ porterSchema.pre('save', async function(next) {
   }
 });
 
+// Virtual for full name
+porterSchema.virtual('name').get(function() {
+  return `${this.firstName} ${this.lastName}`;
+});
+
 // Method to compare passwords
 porterSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
@@ -93,6 +112,8 @@ porterSchema.methods.comparePassword = async function(candidatePassword) {
 porterSchema.methods.toJSON = function() {
   const obj = this.toObject();
   delete obj.password;
+  // Add name field
+  obj.name = this.name;
   return obj;
 };
 

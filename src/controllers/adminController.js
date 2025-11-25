@@ -1088,6 +1088,93 @@ exports.deleteRoom = async (req, res) => {
 };
 
 // Porter Management
+exports.createPorter = async (req, res) => {
+  try {
+    const { 
+      firstName, 
+      lastName, 
+      email, 
+      password,
+      phoneNumber, 
+      assignedHostel,
+      employeeId,
+      shiftSchedule 
+    } = req.body;
+
+    console.log('Creating porter:', { firstName, lastName, email });
+
+    // Check if porter already exists
+    const existingPorter = await Porter.findOne({ email: email.toLowerCase() });
+    if (existingPorter) {
+      return res.status(400).json({
+        success: false,
+        message: 'Porter with this email already exists',
+      });
+    }
+
+    // Check if employeeId is unique (if provided)
+    if (employeeId) {
+      const existingEmployeeId = await Porter.findOne({ employeeId });
+      if (existingEmployeeId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Employee ID already exists',
+        });
+      }
+    }
+
+    // Validate hostel if provided
+    if (assignedHostel) {
+      const hostel = await Hostel.findById(assignedHostel);
+      if (!hostel) {
+        return res.status(404).json({
+          success: false,
+          message: 'Assigned hostel not found',
+        });
+      }
+    }
+
+    // Create porter
+    const porter = await Porter.create({
+      firstName,
+      lastName,
+      email: email.toLowerCase(),
+      password: password || 'Porter123', // Default password
+      phoneNumber,
+      assignedHostel,
+      employeeId,
+      joinedDate: new Date(),
+      shiftSchedule,
+      status: 'active',
+      approved: true,
+      approvedDate: new Date(),
+      approvedBy: req.user._id,
+      firstLogin: true,
+    });
+
+    // Update hostel if assigned
+    if (assignedHostel) {
+      await Hostel.findByIdAndUpdate(assignedHostel, { 
+        $push: { portersAssigned: porter._id } 
+      });
+    }
+
+    console.log('Porter created successfully:', porter._id);
+
+    res.status(201).json({
+      success: true,
+      message: 'Porter created successfully',
+      data: porter,
+    });
+  } catch (error) {
+    console.error('Create porter error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to create porter',
+    });
+  }
+};
+
 exports.approvePorter = async (req, res) => {
   try {
     const { porterId, hostelId } = req.body;
@@ -1112,10 +1199,254 @@ exports.approvePorter = async (req, res) => {
   }
 };
 
+exports.updatePorter = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { 
+      firstName,
+      lastName,
+      email,
+      phoneNumber,
+      assignedHostel,
+      employeeId,
+      shiftSchedule,
+      status 
+    } = req.body;
+
+    console.log('Updating porter:', id, req.body);
+
+    // Find porter
+    const porter = await Porter.findById(id);
+    if (!porter) {
+      return res.status(404).json({
+        success: false,
+        message: 'Porter not found',
+      });
+    }
+
+    // Store old hostel for cleanup
+    const oldHostel = porter.assignedHostel;
+
+    // Check if email is being changed and is unique
+    if (email && email !== porter.email) {
+      const existingPorter = await Porter.findOne({ 
+        email: email.toLowerCase(),
+        _id: { $ne: id }
+      });
+      if (existingPorter) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email already in use by another porter',
+        });
+      }
+      porter.email = email.toLowerCase();
+    }
+
+    // Check if employeeId is being changed and is unique
+    if (employeeId && employeeId !== porter.employeeId) {
+      const existingEmployeeId = await Porter.findOne({ 
+        employeeId,
+        _id: { $ne: id }
+      });
+      if (existingEmployeeId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Employee ID already in use',
+        });
+      }
+      porter.employeeId = employeeId;
+    }
+
+    // Validate new hostel if provided
+    if (assignedHostel && assignedHostel !== oldHostel?.toString()) {
+      const hostel = await Hostel.findById(assignedHostel);
+      if (!hostel) {
+        return res.status(404).json({
+          success: false,
+          message: 'Assigned hostel not found',
+        });
+      }
+
+      // Remove porter from old hostel
+      if (oldHostel) {
+        await Hostel.findByIdAndUpdate(oldHostel, {
+          $pull: { portersAssigned: porter._id }
+        });
+      }
+
+      // Add porter to new hostel
+      await Hostel.findByIdAndUpdate(assignedHostel, {
+        $addToSet: { portersAssigned: porter._id }
+      });
+
+      porter.assignedHostel = assignedHostel;
+    }
+
+    // Update other fields
+    if (firstName) porter.firstName = firstName;
+    if (lastName) porter.lastName = lastName;
+    if (phoneNumber) porter.phoneNumber = phoneNumber;
+    if (shiftSchedule !== undefined) porter.shiftSchedule = shiftSchedule;
+    if (status) porter.status = status;
+
+    await porter.save();
+
+    // Populate hostel details
+    await porter.populate('assignedHostel', 'name code location gender');
+
+    console.log('Porter updated successfully:', porter._id);
+
+    res.status(200).json({
+      success: true,
+      message: 'Porter updated successfully',
+      data: porter,
+    });
+  } catch (error) {
+    console.error('Update porter error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update porter',
+    });
+  }
+};
+
+exports.deletePorter = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    console.log('Deleting porter:', id);
+
+    const porter = await Porter.findById(id);
+    if (!porter) {
+      return res.status(404).json({
+        success: false,
+        message: 'Porter not found',
+      });
+    }
+
+    // Remove porter from assigned hostel
+    if (porter.assignedHostel) {
+      await Hostel.findByIdAndUpdate(porter.assignedHostel, {
+        $pull: { portersAssigned: porter._id }
+      });
+    }
+
+    // Delete porter
+    await Porter.findByIdAndDelete(id);
+
+    console.log('Porter deleted successfully:', id);
+
+    res.status(200).json({
+      success: true,
+      message: 'Porter deleted successfully',
+    });
+  } catch (error) {
+    console.error('Delete porter error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to delete porter',
+    });
+  }
+};
+
+exports.assignHostelToPorter = async (req, res) => {
+  try {
+    const { porterId, hostelId } = req.body;
+
+    console.log('Assigning hostel to porter:', { porterId, hostelId });
+
+    // Validate required fields
+    if (!porterId || !hostelId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Porter ID and Hostel ID are required',
+      });
+    }
+
+    // Check if porter exists
+    const porter = await Porter.findById(porterId);
+    if (!porter) {
+      return res.status(404).json({
+        success: false,
+        message: 'Porter not found',
+      });
+    }
+
+    // Check if hostel exists
+    const hostel = await Hostel.findById(hostelId);
+    if (!hostel) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hostel not found',
+      });
+    }
+
+    // Store old hostel for cleanup
+    const oldHostel = porter.assignedHostel;
+
+    // Remove porter from old hostel if exists
+    if (oldHostel && oldHostel.toString() !== hostelId) {
+      await Hostel.findByIdAndUpdate(oldHostel, {
+        $pull: { portersAssigned: porter._id }
+      });
+    }
+
+    // Add porter to new hostel's portersAssigned array
+    await Hostel.findByIdAndUpdate(hostelId, {
+      $addToSet: { portersAssigned: porter._id }
+    });
+
+    // Update porter with new hostel assignment
+    porter.assignedHostel = hostelId;
+    await porter.save();
+
+    // Populate the hostel details for response
+    await porter.populate('assignedHostel', 'name code location gender');
+
+    console.log('Hostel assigned successfully to porter:', porter._id);
+
+    res.status(200).json({
+      success: true,
+      message: `Hostel "${hostel.name}" assigned successfully to ${porter.firstName} ${porter.lastName}`,
+      data: porter,
+    });
+
+  } catch (error) {
+    console.error('Error assigning hostel:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to assign hostel',
+      error: error.message,
+    });
+  }
+};
+
 exports.getPorters = async (req, res) => {
   try {
-    const porters = await Porter.find().populate('assignedHostel');
-    res.status(200).json({ success: true, data: porters });
+    const porters = await Porter.find()
+      .populate('assignedHostel', 'name code location gender')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Transform data to include name field and format response
+    const transformedPorters = porters.map(porter => ({
+      _id: porter._id,
+      name: `${porter.firstName} ${porter.lastName}`,
+      email: porter.email,
+      phoneNumber: porter.phoneNumber,
+      assignedHostel: porter.assignedHostel,
+      employeeId: porter.employeeId,
+      joinedDate: porter.joinedDate,
+      status: porter.status,
+      shiftSchedule: porter.shiftSchedule,
+      approved: porter.approved,
+      approvedDate: porter.approvedDate,
+      firstLogin: porter.firstLogin,
+      isActive: porter.isActive,
+      createdAt: porter.createdAt,
+    }));
+
+    res.status(200).json({ success: true, data: transformedPorters });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

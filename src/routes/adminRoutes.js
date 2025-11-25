@@ -1304,6 +1304,188 @@ router.delete('/rooms/:id', validateMongoId('id'), adminController.deleteRoom);
 
 /**
  * @swagger
+ * /api/admin/porters:
+ *   post:
+ *     summary: Create a new porter
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - firstName
+ *               - lastName
+ *               - email
+ *               - phoneNumber
+ *             properties:
+ *               firstName:
+ *                 type: string
+ *                 example: John
+ *               lastName:
+ *                 type: string
+ *                 example: Doe
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: porter@example.com
+ *               password:
+ *                 type: string
+ *                 example: Porter123
+ *                 description: Optional, defaults to Porter123
+ *               phoneNumber:
+ *                 type: string
+ *                 example: "08012345678"
+ *               assignedHostel:
+ *                 type: string
+ *                 description: Hostel ID to assign porter to
+ *               employeeId:
+ *                 type: string
+ *                 example: EMP001
+ *               shiftSchedule:
+ *                 type: string
+ *                 example: "Day Shift (8AM - 4PM)"
+ *     responses:
+ *       201:
+ *         description: Porter created successfully
+ *       400:
+ *         description: Validation error or porter already exists
+ */
+router.post('/porters', adminController.createPorter);
+
+/**
+ * @swagger
+ * /api/admin/porters/{id}:
+ *   put:
+ *     summary: Update an existing porter
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Porter ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               firstName:
+ *                 type: string
+ *                 example: John
+ *               lastName:
+ *                 type: string
+ *                 example: Doe
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: porter@example.com
+ *               phoneNumber:
+ *                 type: string
+ *                 example: "08012345678"
+ *               assignedHostel:
+ *                 type: string
+ *                 description: Hostel ID to assign porter to
+ *               employeeId:
+ *                 type: string
+ *                 example: EMP001
+ *               shiftSchedule:
+ *                 type: string
+ *                 example: "Day Shift (8AM - 4PM)"
+ *               status:
+ *                 type: string
+ *                 enum: [pending, approved, rejected, suspended, active]
+ *                 example: active
+ *     responses:
+ *       200:
+ *         description: Porter updated successfully
+ *       404:
+ *         description: Porter not found
+ *       400:
+ *         description: Validation error
+ */
+router.put('/porters/:id', validateMongoId('id'), adminController.updatePorter);
+
+/**
+ * @swagger
+ * /api/admin/porters/{id}:
+ *   delete:
+ *     summary: Delete a porter
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Porter ID
+ *     responses:
+ *       200:
+ *         description: Porter deleted successfully
+ *       404:
+ *         description: Porter not found
+ */
+router.delete('/porters/:id', validateMongoId('id'), adminController.deletePorter);
+
+/**
+ * @swagger
+ * /api/admin/porters/assign-hostel:
+ *   post:
+ *     summary: Assign hostel to a porter
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - porterId
+ *               - hostelId
+ *             properties:
+ *               porterId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the porter
+ *                 example: "676f123abc456def789ghi01"
+ *               hostelId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the hostel
+ *                 example: "676f456def789ghi012jkl34"
+ *     responses:
+ *       200:
+ *         description: Hostel assigned successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *       400:
+ *         description: Validation error or missing required fields
+ *       404:
+ *         description: Porter or Hostel not found
+ */
+router.post('/porters/assign-hostel', adminController.assignHostelToPorter);
+
+/**
+ * @swagger
  * /api/admin/porters/approve:
  *   post:
  *     summary: Approve a porter application
