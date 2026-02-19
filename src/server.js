@@ -29,14 +29,19 @@ app.use(cors()); // Enable CORS
 app.use(express.json()); // Body parser
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging middleware - Log all incoming requests
+// Request logging middleware - Log all incoming requests (optimized)
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
+  // Only log body for non-GET requests and limit size
+  const bodyLog = req.method !== 'GET' && req.body ? 
+    (JSON.stringify(req.body).length > 500 ? '[Body too large]' : JSON.stringify(req.body)) : 
+    '{}';
+  
   console.log(`
 ╔════════════════════════════════════════════════════════════
 ║ ${timestamp}
 ║ ${req.method} ${req.originalUrl}
-║ Body: ${JSON.stringify(req.body, null, 2)}
+║ Body: ${bodyLog}
 ╚════════════════════════════════════════════════════════════
   `);
   next();

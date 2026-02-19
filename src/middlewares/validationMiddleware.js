@@ -199,8 +199,7 @@ const validateReservation = [
     .isMongoId()
     .withMessage('Invalid room ID'),
   body('bunkId')
-    .notEmpty()
-    .withMessage('Bunk ID is required')
+    .optional()
     .isMongoId()
     .withMessage('Invalid bunk ID'),
   body('roommates')

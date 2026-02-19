@@ -13,6 +13,30 @@ const { adminOnly, studentOnly, restrictTo } = require('../middlewares/roleMiddl
 
 /**
  * @swagger
+ * /api/payments/callback:
+ *   get:
+ *     summary: Paystack callback handler (redirects from Paystack)
+ *     tags: [Payment]
+ *     parameters:
+ *       - in: query
+ *         name: reference
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Payment reference from Paystack
+ *       - in: query
+ *         name: trxref
+ *         schema:
+ *           type: string
+ *         description: Transaction reference from Paystack
+ *     responses:
+ *       302:
+ *         description: Redirects to frontend with payment status
+ */
+router.get('/callback', paymentController.handlePaystackCallback);
+
+/**
+ * @swagger
  * /api/payment/verify/{reference}:
  *   get:
  *     summary: Verify payment from Paystack callback

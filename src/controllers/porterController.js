@@ -148,8 +148,14 @@ exports.checkInStudent = async (req, res) => {
     const { studentId } = req.params;
     const { paymentCode } = req.body;
 
+    console.log('==================== CHECK-IN REQUEST ====================');
+    console.log('Porter ID:', porter._id);
+    console.log('Porter Assigned Hostel:', porter.assignedHostel);
+    console.log('Student ID:', studentId);
+    console.log('Payment Code:', paymentCode);
+
     const student = await Student.findById(studentId)
-      .populate('assignedRoom assignedBunk');
+      .populate('assignedRoom assignedBunk assignedHostel');
 
     if (!student) {
       return res.status(404).json({
@@ -158,38 +164,83 @@ exports.checkInStudent = async (req, res) => {
       });
     }
 
+    console.log('Student Found:', `${student.firstName} ${student.lastName}`);
+    console.log('Student Assigned Hostel (raw):', student.assignedHostel);
+    console.log('Student Assigned Hostel ID:', student.assignedHostel?._id || student.assignedHostel);
+    console.log('Student Reservation Status:', student.reservationStatus);
+    console.log('Student Payment Code:', student.paymentCode);
+    
+    // Get the actual hostel IDs for comparison
+    const studentHostelId = (student.assignedHostel?._id || student.assignedHostel)?.toString();
+    // Porter's assignedHostel might be populated or just an ID
+    const porterHostelId = (porter.assignedHostel?._id || porter.assignedHostel)?.toString();
+    
+    console.log('Comparison - Student Hostel:', studentHostelId);
+    console.log('Comparison - Porter Hostel:', porterHostelId);
+    console.log('Match:', studentHostelId === porterHostelId);
+    console.log('==========================================================');
+
     // Verify student is in porter's hostel
-    if (student.assignedHostel.toString() !== porter.assignedHostel.toString()) {
+    if (studentHostelId !== porterHostelId) {
+      console.log('❌ HOSTEL MISMATCH!');
       return res.status(403).json({
         success: false,
         message: 'Student is not in your assigned hostel',
+        debug: {
+          studentHostelId: studentHostelId,
+          porterHostelId: porterHostelId,
+          studentName: `${student.firstName} ${student.lastName}`,
+          studentHostelName: student.assignedHostel?.name || 'Not assigned'
+        }
       });
     }
 
-    // Verify payment code
-    if (student.paymentCode !== paymentCode) {
+    // Verify payment code (optional check - allow check-in even without payment code for now)
+    if (paymentCode && student.paymentCode !== paymentCode) {
+      console.log('❌ PAYMENT CODE MISMATCH!');
+      console.log('Expected:', student.paymentCode, 'Received:', paymentCode);
       return res.status(400).json({
         success: false,
         message: 'Invalid payment code',
       });
     }
 
+    console.log('✅ All validations passed. Checking in student...');
+
     // Update student status
     student.reservationStatus = 'checked_in';
+    student.checkInDate = new Date();
     await student.save();
+
+    console.log('✅ Student status updated to checked_in');
 
     // Update bunk status
     const bunk = await Bunk.findById(student.assignedBunk);
-    bunk.status = 'occupied';
-    await bunk.save();
+    if (bunk) {
+      bunk.status = 'occupied';
+      await bunk.save();
+      console.log('✅ Bunk status updated to occupied');
+    }
+
+    console.log('✅ CHECK-IN SUCCESSFUL!');
+    console.log('==========================================================');
+
+    // Fetch fresh student data to return
+    const updatedStudent = await Student.findById(studentId)
+      .populate('assignedRoom assignedBunk assignedHostel')
+      .select('-password');
+
+    console.log('Updated student reservation status:', updatedStudent.reservationStatus);
+    console.log('Updated student check-in date:', updatedStudent.checkInDate);
 
     res.status(200).json({
       success: true,
       message: 'Student checked in successfully',
-      data: student,
+      data: updatedStudent,
     });
   } catch (error) {
     console.error('Check in error:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -211,7 +262,10 @@ exports.getRooms = async (req, res) => {
     }
 
     const rooms = await Room.find({ hostel: porter.assignedHostel })
-      .populate('students');
+      .populate('hostel', 'name')
+      .populate('students')
+      .select('roomNumber floor capacity currentOccupants level hostel status')
+      .sort({ roomNumber: 1 });
 
     res.status(200).json({
       success: true,

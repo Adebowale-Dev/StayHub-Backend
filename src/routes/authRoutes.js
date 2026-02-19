@@ -98,6 +98,89 @@ router.get('/profile', authController.getProfile);
 
 /**
  * @swagger
+ * /api/auth/profile:
+ *   put:
+ *     summary: Update user profile
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Full name (will be split into firstName and lastName)
+ *                 example: John Doe
+ *               firstName:
+ *                 type: string
+ *                 example: John
+ *               lastName:
+ *                 type: string
+ *                 example: Doe
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: john@example.com
+ *               phoneNumber:
+ *                 type: string
+ *                 example: "08012345678"
+ *               gender:
+ *                 type: string
+ *                 enum: [male, female]
+ *                 description: Student only
+ *                 example: male
+ *               address:
+ *                 type: string
+ *                 description: Student only
+ *                 example: "123 Main St, Lagos"
+ *               dateOfBirth:
+ *                 type: string
+ *                 format: date
+ *                 description: Student only (ISO date format)
+ *                 example: "2000-01-15"
+ *               emergencyContact:
+ *                 type: string
+ *                 description: Student only
+ *                 example: "08098765432"
+ *               matricNumber:
+ *                 type: string
+ *                 description: Student only - Matriculation number
+ *                 example: "20/0001"
+ *               level:
+ *                 type: string
+ *                 description: Student only - Academic level
+ *                 example: "200"
+ *               shiftSchedule:
+ *                 type: string
+ *                 description: Porter only
+ *                 example: "Day Shift (8AM - 4PM)"
+ *     responses:
+ *       200:
+ *         description: Profile updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 user:
+ *                   type: object
+ *       400:
+ *         description: Email already in use
+ *       404:
+ *         description: User not found
+ */
+router.put('/profile', authController.updateProfile);
+
+/**
+ * @swagger
  * /api/auth/change-password:
  *   post:
  *     summary: Change user password

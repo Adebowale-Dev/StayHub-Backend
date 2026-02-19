@@ -80,6 +80,197 @@ const notifyPaymentSuccess = async (studentId, payment) => {
 };
 
 /**
+ * Send payment verification code to student
+ */
+const sendPaymentCode = async (studentId, paymentCode, paymentReference) => {
+  try {
+    const student = await Student.findById(studentId);
+    if (!student) throw new Error('Student not found');
+
+    const emailService = require('./emailService');
+    
+    const subject = `Your Payment Code: ${paymentCode} - StayHub`;
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { 
+            font-family: Arial, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 0;
+          }
+          .container { 
+            max-width: 600px; 
+            margin: 20px auto; 
+            background-color: #ffffff;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+          }
+          .header { 
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white; 
+            padding: 30px 20px; 
+            text-align: center; 
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 28px;
+          }
+          .content { 
+            padding: 30px; 
+          }
+          .code-box { 
+            background: #f0f9ff; 
+            border: 3px solid #4CAF50; 
+            border-radius: 10px;
+            padding: 25px; 
+            text-align: center; 
+            margin: 25px 0; 
+          }
+          .code { 
+            font-size: 42px; 
+            font-weight: bold; 
+            letter-spacing: 12px; 
+            color: #4CAF50; 
+            font-family: 'Courier New', monospace;
+            margin: 15px 0;
+          }
+          .info-box { 
+            background: #e8f5e9; 
+            padding: 20px; 
+            border-left: 5px solid #4CAF50; 
+            margin: 20px 0; 
+            border-radius: 5px;
+          }
+          .warning-box {
+            background: #fff3e0;
+            padding: 20px;
+            border-left: 5px solid #ff9800;
+            margin: 20px 0;
+            border-radius: 5px;
+          }
+          .steps {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+          }
+          .steps ol {
+            margin: 10px 0;
+            padding-left: 20px;
+          }
+          .steps li {
+            margin: 10px 0;
+            line-height: 1.8;
+          }
+          .footer { 
+            text-align: center; 
+            color: #666; 
+            font-size: 13px; 
+            padding: 20px;
+            background: #f9f9f9;
+            border-top: 1px solid #e0e0e0;
+          }
+          .button {
+            display: inline-block;
+            padding: 12px 30px;
+            background: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 15px 0;
+            font-weight: bold;
+          }
+          strong { color: #2c5f2d; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>🏠 StayHub Payment Code</h1>
+          </div>
+          
+          <div class="content">
+            <h2 style="color: #4CAF50; margin-top: 0;">Hello ${student.firstName}!</h2>
+            
+            <p>Your hostel payment has been initialized successfully. Here's your verification code:</p>
+            
+            <div class="code-box">
+              <p style="margin: 0; color: #666; font-size: 14px;">Your Verification Code</p>
+              <div class="code">${paymentCode}</div>
+              <p style="margin: 5px 0 0 0; color: #888; font-size: 12px;">Keep this code safe</p>
+            </div>
+
+            <div class="info-box">
+              <strong>📋 Payment Details:</strong><br>
+              <strong>Reference:</strong> ${paymentReference}<br>
+              <strong>Student:</strong> ${student.firstName} ${student.lastName}<br>
+              <strong>Matric No:</strong> ${student.matricNo}<br>
+              <strong>Date:</strong> ${new Date().toLocaleString('en-US', { 
+                dateStyle: 'long', 
+                timeStyle: 'short' 
+              })}
+            </div>
+
+            <div class="steps">
+              <strong style="font-size: 16px;">📝 How to Complete Payment:</strong>
+              <ol>
+                <li><strong>Complete Payment:</strong> Click the Paystack payment link to pay your hostel fees</li>
+                <li><strong>Return to StayHub:</strong> After successful payment, you'll be redirected back</li>
+                <li><strong>Enter Code:</strong> Input the verification code above (${paymentCode})</li>
+                <li><strong>Get Verified:</strong> Your payment will be verified instantly!</li>
+                <li><strong>Reserve Room:</strong> Proceed to select and reserve your hostel room</li>
+              </ol>
+            </div>
+
+            <div class="warning-box">
+              <strong>⚠️ Important Notes:</strong>
+              <ul style="margin: 10px 0; padding-left: 20px;">
+                <li>This code is valid for <strong>24 hours</strong></li>
+                <li>Keep this code <strong>confidential</strong> - don't share with anyone</li>
+                <li>You must <strong>complete payment first</strong> before verification</li>
+                <li>Check your spam folder if you can't find this email</li>
+              </ul>
+            </div>
+
+            <p style="margin-top: 25px;">If you didn't initiate this payment, please ignore this email or contact our support team immediately.</p>
+            
+            <p style="margin-top: 20px; color: #666;">
+              Need help? Contact us at <a href="mailto:support@stayhub.com" style="color: #4CAF50;">support@stayhub.com</a>
+            </p>
+          </div>
+
+          <div class="footer">
+            <p style="margin: 5px 0;"><strong>StayHub - Smart Hostel Management</strong></p>
+            <p style="margin: 5px 0;">This is an automated email. Please do not reply.</p>
+            <p style="margin: 5px 0; color: #999;">&copy; ${new Date().getFullYear()} StayHub. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    await emailService.sendEmail({
+      to: student.email,
+      subject: subject,
+      html: html
+    });
+    
+    console.log(`✅ Payment code sent to ${student.email}`);
+    
+    return true;
+  } catch (error) {
+    console.error('Error sending payment code:', error);
+    throw error;
+  }
+};
+
+/**
  * Notify student about reservation confirmation
  */
 const notifyReservationConfirmed = async (studentId, roomId, bunkId, hostelId) => {
@@ -209,6 +400,7 @@ module.exports = {
   NotificationType,
   sendNotification,
   notifyPaymentSuccess,
+  sendPaymentCode,
   notifyReservationConfirmed,
   notifyRoommateReserved,
   notifyPorterApproved,

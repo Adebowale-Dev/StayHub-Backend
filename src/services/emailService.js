@@ -5,11 +5,24 @@ const config = require('../config/env');
 const transporter = nodemailer.createTransport({
   host: config.EMAIL_HOST,
   port: config.EMAIL_PORT,
-  secure: false, // true for 465, false for other ports
+  secure: config.EMAIL_PORT === 465, // true only for port 465
+  requireTLS: config.EMAIL_PORT === 587, // force STARTTLS on port 587
   auth: {
     user: config.EMAIL_USER,
     pass: config.EMAIL_PASSWORD,
   },
+  tls: {
+    rejectUnauthorized: false, // allow self-signed certs in development
+  },
+});
+
+// Verify transporter on startup
+transporter.verify((error) => {
+  if (error) {
+    console.error('❌ Email service misconfigured:', error.message);
+  } else {
+    console.log('✅ Email service ready — connected to', config.EMAIL_HOST);
+  }
 });
 
 /**
@@ -22,8 +35,13 @@ const transporter = nodemailer.createTransport({
  */
 const sendEmail = async (options) => {
   try {
+    // Gmail requires the authenticated account as the envelope sender.
+    // Display name from EMAIL_FROM is kept, but the actual address must be EMAIL_USER.
+    const displayName = config.EMAIL_FROM
+      ? config.EMAIL_FROM.replace(/<.*>/, '').trim()
+      : 'StayHub';
     const mailOptions = {
-      from: config.EMAIL_FROM,
+      from: `${displayName} <${config.EMAIL_USER}>`,
       to: options.to,
       subject: options.subject,
       html: options.html,

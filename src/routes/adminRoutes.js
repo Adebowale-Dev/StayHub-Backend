@@ -994,6 +994,51 @@ router.get('/students/female', adminController.getFemaleStudents);
  *       400:
  *         description: Invalid input data
  */
+/**
+ * @swagger
+ * /api/admin/students/{id}/password:
+ *   patch:
+ *     summary: Reset student password
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Student ID
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               newPassword:
+ *                 type: string
+ *                 description: New password (optional, uses default if not provided)
+ *                 example: "12345678"
+ *     responses:
+ *       200:
+ *         description: Password reset successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 defaultPassword:
+ *                   type: string
+ *                   description: Only returned if no new password was provided
+ *       404:
+ *         description: Student not found
+ */
+router.patch('/students/:id/password', adminController.resetStudentPassword);
 router.put('/students/:id', validateMongoId, adminController.updateStudent);
 
 /**
@@ -1046,6 +1091,40 @@ router.put('/students/:id', validateMongoId, adminController.updateStudent);
  *         description: Server error
  */
 router.delete('/students/:id', validateMongoId, adminController.deleteStudent);
+
+// Alternative force delete endpoint (for when regular delete times out)
+router.post('/students/:id/force-delete', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log('🔴 Force delete START for student ID:', id);
+    
+    // CRITICAL: Use direct MongoDB delete to bypass ALL mongoose hooks/middleware
+    const mongoose = require('mongoose');
+    const ObjectId = mongoose.Types.ObjectId;
+    
+    console.log('🟡 Deleting from MongoDB collection directly...');
+    
+    const result = await mongoose.connection.db
+      .collection('students')  // Your collection name - adjust if different
+      .deleteOne({ _id: new ObjectId(id) });
+    
+    console.log('🟢 Delete completed successfully. Deleted count:', result.deletedCount);
+    
+    // IMPORTANT: Send response immediately
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Student deleted successfully',
+      deletedCount: result.deletedCount 
+    });
+    
+  } catch (error) {
+    console.error('❌ Force delete ERROR:', error);
+    return res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+});
 
 /**
  * @swagger

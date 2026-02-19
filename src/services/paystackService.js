@@ -36,10 +36,20 @@ const initializeTransaction = async (data) => {
  */
 const verifyTransaction = async (reference) => {
   try {
+    console.log('📞 Calling Paystack API for reference:', reference);
     const response = await paystackAPI.get(`/transaction/verify/${reference}`);
+
+    console.log('📥 Raw Paystack API response:');
+    console.log('   Response status:', response.status);
+    console.log('   Response data type:', typeof response.data);
+    console.log('   Response data.data type:', typeof response.data.data);
+    console.log('   Response data.data.status:', response.data.data?.status);
+    console.log('   Response data.data.status type:', typeof response.data.data?.status);
+    console.log('   Full response.data:', JSON.stringify(response.data, null, 2));
 
     return {
       success: true,
+      status: response.data.status ? 'success' : 'failed',
       data: response.data.data,
     };
   } catch (error) {

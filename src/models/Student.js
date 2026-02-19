@@ -30,6 +30,21 @@ const studentSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  phoneNumber: {
+    type: String,
+    trim: true,
+  },
+  address: {
+    type: String,
+    trim: true,
+  },
+  dateOfBirth: {
+    type: Date,
+  },
+  emergencyContact: {
+    type: String,
+    trim: true,
+  },
   level: {
     type: Number,
     required: true,
@@ -85,7 +100,13 @@ const studentSchema = new mongoose.Schema({
     enum: ['none', 'temporary', 'confirmed', 'checked_in', 'expired'],
     default: 'none',
   },
+  reservedAt: {
+    type: Date,
+  },
   reservationExpiresAt: {
+    type: Date,
+  },
+  checkInDate: {
     type: Date,
   },
   reservedBy: {
@@ -111,6 +132,17 @@ const studentSchema = new mongoose.Schema({
 }, {
   timestamps: true,
 });
+
+// Indexes for performance optimization
+// Note: matricNo and email already have indexes from unique: true
+studentSchema.index({ level: 1 });
+studentSchema.index({ college: 1 });
+studentSchema.index({ department: 1 });
+studentSchema.index({ paymentStatus: 1 });
+studentSchema.index({ reservationStatus: 1 });
+studentSchema.index({ assignedHostel: 1 });
+studentSchema.index({ isActive: 1 });
+studentSchema.index({ level: 1, college: 1, isActive: 1 }); // Compound index for common queries
 
 // Hash password before saving
 studentSchema.pre('save', async function(next) {

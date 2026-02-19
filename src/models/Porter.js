@@ -85,6 +85,13 @@ const porterSchema = new mongoose.Schema({
   toObject: { virtuals: true },
 });
 
+// Indexes for performance
+// Note: email already has index from unique: true
+porterSchema.index({ assignedHostel: 1 });
+porterSchema.index({ status: 1 });
+porterSchema.index({ approved: 1 });
+porterSchema.index({ isActive: 1 });
+
 // Hash password before saving
 porterSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();

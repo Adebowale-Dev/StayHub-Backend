@@ -40,7 +40,9 @@ const login = async (req, res) => {
       }
     } else {
       // It's a matric number - student login
-      user = await Student.findOne({ matricNo: identifier.toUpperCase() });
+      user = await Student.findOne({ matricNo: identifier.toUpperCase() })
+        .populate('college', 'name code')
+        .populate('department', 'name code');
       if (user) {
         role = 'student';
       }
@@ -77,18 +79,37 @@ const login = async (req, res) => {
     // Generate token
     const token = generateToken(user._id, role);
 
+    // Build user response object
+    const userResponse = {
+      id: user._id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role,
+      firstLogin: user.firstLogin,
+    };
+
+    // Add role-specific fields
+    if (role === 'student') {
+      userResponse.matricNumber = user.matricNo;
+      userResponse.matricNo = user.matricNo;
+      userResponse.level = user.level;
+      userResponse.gender = user.gender;
+      userResponse.phoneNumber = user.phoneNumber;
+      userResponse.college = user.college;
+      userResponse.department = user.department;
+      userResponse.paymentStatus = user.paymentStatus;
+      userResponse.reservationStatus = user.reservationStatus;
+    } else if (role === 'porter') {
+      userResponse.phoneNumber = user.phoneNumber;
+      userResponse.assignedHostel = user.assignedHostel;
+    }
+
     res.status(200).json({
       success: true,
       message: 'Login successful',
       token,
-      user: {
-        id: user._id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role,
-        firstLogin: user.firstLogin,
-      },
+      user: userResponse,
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -107,7 +128,34 @@ const login = async (req, res) => {
 const changePassword = async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body;
-    const user = req.user;
+    const userId = req.user._id;
+    const userRole = req.userRole;
+
+    // Fetch user with password field (middleware excludes it)
+    let user;
+    switch (userRole) {
+      case 'admin':
+        user = await Admin.findById(userId);
+        break;
+      case 'student':
+        user = await Student.findById(userId);
+        break;
+      case 'porter':
+        user = await Porter.findById(userId);
+        break;
+      default:
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid user role',
+        });
+    }
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
 
     // Verify old password
     const isMatch = await user.comparePassword(oldPassword);
@@ -143,16 +191,211 @@ const changePassword = async (req, res) => {
  */
 const getProfile = async (req, res) => {
   try {
+    const userId = req.user._id;
+    const userRole = req.userRole;
+    
+    console.log(`Fetching profile for ${userRole}:`, userId);
+    
+    let user;
+
+    // Fetch fresh user data from database with populated fields
+    if (userRole === 'admin') {
+      user = await Admin.findById(userId).select('-password');
+    } else if (userRole === 'porter') {
+      user = await Porter.findById(userId)
+        .select('-password')
+        .populate('assignedHostel', 'name code location gender');
+    } else if (userRole === 'student') {
+      user = await Student.findById(userId)
+        .select('-password')
+        .populate('college', 'name')
+        .populate('department', 'name')
+        .populate('assignedHostel', 'name code')
+        .populate('assignedRoom', 'roomNumber floor')
+        .populate('assignedBunk', 'bunkNumber');
+    }
+
+    if (!user) {
+      console.log('User not found:', userId);
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    console.log(`Profile fetched successfully for ${userRole}:`, user._id);
+    console.log('User data:', JSON.stringify(user, null, 2));
+
+    // Convert to plain object and add combined name field
+    const userObject = user.toObject();
+    if (userObject.firstName && userObject.lastName) {
+      userObject.name = `${userObject.firstName} ${userObject.lastName}`;
+    } else if (userObject.firstName) {
+      userObject.name = userObject.firstName;
+    } else if (userObject.lastName) {
+      userObject.name = userObject.lastName;
+    }
+
+    // For students, add matricNumber alias and ensure populated fields are properly formatted
+    if (userRole === 'student') {
+      // Add matricNumber as an alias for matricNo
+      userObject.matricNumber = userObject.matricNo;
+      
+      // Ensure college, department, level, and gender are available at root level
+      // These should already be populated, but let's ensure they're accessible
+      console.log('Student specific fields:');
+      console.log('- matricNo:', userObject.matricNo);
+      console.log('- college:', userObject.college);
+      console.log('- department:', userObject.department);
+      console.log('- level:', userObject.level);
+      console.log('- gender:', userObject.gender);
+    }
+
     res.status(200).json({
       success: true,
-      user: req.user,
-      role: req.userRole,
+      user: userObject,
+      role: userRole,
     });
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error while fetching profile',
+    });
+  }
+};
+
+/**
+ * @desc    Update user profile
+ * @route   PUT /api/auth/profile
+ * @access  Private
+ */
+const updateProfile = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const userRole = req.userRole;
+    const updateData = req.body;
+
+    console.log(`Updating profile for ${userRole}:`, userId);
+    console.log('Update data received:', updateData);
+
+    // Remove sensitive fields that shouldn't be updated via profile
+    delete updateData.password;
+    delete updateData.email; // Email changes should go through a separate verification flow
+    delete updateData.role;
+    delete updateData._id;
+
+    let updatedUser;
+
+    // Update based on user role
+    if (userRole === 'admin') {
+      updatedUser = await Admin.findByIdAndUpdate(
+        userId,
+        { 
+          firstName: updateData.firstName,
+          lastName: updateData.lastName,
+          phoneNumber: updateData.phoneNumber,
+        },
+        { new: true, runValidators: true }
+      ).select('-password');
+    } else if (userRole === 'porter') {
+      updatedUser = await Porter.findByIdAndUpdate(
+        userId,
+        {
+          firstName: updateData.firstName,
+          lastName: updateData.lastName,
+          phoneNumber: updateData.phoneNumber,
+          shiftSchedule: updateData.shiftSchedule,
+        },
+        { new: true, runValidators: true }
+      ).select('-password').populate('assignedHostel', 'name code location');
+    } else if (userRole === 'student') {
+      // Build update object for student with only provided fields
+      const studentUpdate = {};
+      
+      // Handle name field (split into firstName and lastName if provided)
+      if (updateData.name !== undefined) {
+        const nameParts = updateData.name.trim().split(' ');
+        if (nameParts.length >= 2) {
+          studentUpdate.firstName = nameParts[0];
+          studentUpdate.lastName = nameParts.slice(1).join(' ');
+        }
+      }
+      
+      // Individual name fields take precedence
+      if (updateData.firstName !== undefined) studentUpdate.firstName = updateData.firstName;
+      if (updateData.lastName !== undefined) studentUpdate.lastName = updateData.lastName;
+      if (updateData.phoneNumber !== undefined) studentUpdate.phoneNumber = updateData.phoneNumber;
+      if (updateData.address !== undefined) studentUpdate.address = updateData.address;
+      if (updateData.dateOfBirth !== undefined) studentUpdate.dateOfBirth = updateData.dateOfBirth;
+      if (updateData.emergencyContact !== undefined) studentUpdate.emergencyContact = updateData.emergencyContact;
+      if (updateData.gender !== undefined) studentUpdate.gender = updateData.gender;
+      if (updateData.matricNumber !== undefined) studentUpdate.matricNo = updateData.matricNumber;
+      if (updateData.level !== undefined) studentUpdate.level = updateData.level;
+      
+      // Allow email update (optional - you can remove this if email should not be changeable)
+      if (updateData.email !== undefined && updateData.email !== req.user.email) {
+        // Check if email already exists
+        const existingStudent = await Student.findOne({ 
+          email: updateData.email.toLowerCase(),
+          _id: { $ne: userId }
+        });
+        if (existingStudent) {
+          return res.status(400).json({
+            success: false,
+            message: 'Email already in use by another student'
+          });
+        }
+        studentUpdate.email = updateData.email.toLowerCase();
+      }
+
+      console.log('Student update object:', studentUpdate);
+
+      updatedUser = await Student.findByIdAndUpdate(
+        userId,
+        studentUpdate,
+        { new: true, runValidators: true }
+      )
+      .select('-password')
+      .populate('college', 'name')
+      .populate('department', 'name')
+      .populate('assignedHostel', 'name code')
+      .populate('assignedRoom', 'roomNumber')
+      .populate('assignedBunk', 'bunkNumber');
+    }
+
+    if (!updatedUser) {
+      console.log('User not found for update:', userId);
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    console.log(`Profile updated successfully for ${userRole}:`, updatedUser._id);
+    console.log('Updated user data:', JSON.stringify(updatedUser, null, 2));
+
+    // Convert to plain object and add combined name field
+    const userObject = updatedUser.toObject();
+    if (userObject.firstName && userObject.lastName) {
+      userObject.name = `${userObject.firstName} ${userObject.lastName}`;
+    } else if (userObject.firstName) {
+      userObject.name = userObject.firstName;
+    } else if (userObject.lastName) {
+      userObject.name = userObject.lastName;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: userObject,
+      data: userObject, // Some frontends might expect 'data' instead of 'user'
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Server error while updating profile',
     });
   }
 };
@@ -236,6 +479,7 @@ module.exports = {
   login,
   changePassword,
   getProfile,
+  updateProfile,
   logout,
   forgotPassword,
 };

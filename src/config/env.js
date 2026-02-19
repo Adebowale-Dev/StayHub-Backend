@@ -19,9 +19,9 @@ module.exports = {
   
   // Email
   EMAIL_HOST: process.env.EMAIL_HOST,
-  EMAIL_PORT: process.env.EMAIL_PORT,
+  EMAIL_PORT: parseInt(process.env.EMAIL_PORT) || 587,
   EMAIL_USER: process.env.EMAIL_USER,
-  EMAIL_PASSWORD: process.env.EMAIL_PASSWORD,
+  EMAIL_PASSWORD: process.env.EMAIL_PASSWORD ? process.env.EMAIL_PASSWORD.replace(/\s/g, '') : undefined,
   EMAIL_FROM: process.env.EMAIL_FROM,
   
   // Frontend

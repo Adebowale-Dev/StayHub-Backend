@@ -37,6 +37,10 @@ const adminSchema = new mongoose.Schema({
   timestamps: true,
 });
 
+// Indexes for performance
+// Note: email already has index from unique: true
+adminSchema.index({ isActive: 1 });
+
 // Hash password before saving
 adminSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();

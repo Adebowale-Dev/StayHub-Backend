@@ -666,53 +666,135 @@ exports.updateStudent = async (req, res) => {
 };
 
 exports.deleteStudent = async (req, res) => {
+  console.log('🗑️  DELETE STARTED for student:', req.params.id);
+  const startTime = Date.now();
+  
   try {
     const { id } = req.params;
     const { permanent = 'false' } = req.query;
-
-    const student = await Student.findById(id);
-
-    if (!student) {
-      return res.status(404).json({ success: false, message: 'Student not found' });
-    }
+    
+    console.log('📋 Delete type:', permanent === 'true' ? 'PERMANENT' : 'SOFT DELETE');
 
     if (permanent === 'true') {
-      // Permanent deletion
-      await Student.findByIdAndDelete(id);
+      // Permanent deletion - use direct MongoDB collection delete to bypass Mongoose hooks
+      console.log('🔥 Executing permanent delete via direct MongoDB...');
+      
+      const result = await Student.collection.deleteOne(
+        { _id: new mongoose.Types.ObjectId(id) }
+      );
+      
+      const elapsed = Date.now() - startTime;
+      console.log(`✅ Permanent delete completed in ${elapsed}ms`);
+
+      if (result.deletedCount === 0) {
+        console.log('❌ Student not found');
+        return res.status(404).json({ success: false, message: 'Student not found' });
+      }
 
       res.status(200).json({
         success: true,
         message: 'Student permanently deleted',
-        data: {
-          id: student._id,
-          matricNo: student.matricNo,
-          name: `${student.firstName} ${student.lastName}`
-        }
+        data: { id }
       });
     } else {
-      // Soft delete (set isActive to false)
-      student.isActive = false;
-      await student.save();
+      // Soft delete - use direct collection update
+      console.log('🔄 Executing soft delete via direct MongoDB...');
+      
+      const result = await Student.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(id) },
+        { $set: { isActive: false } }
+      );
+      
+      const elapsed = Date.now() - startTime;
+      console.log(`✅ Soft delete completed in ${elapsed}ms`);
+
+      if (result.matchedCount === 0) {
+        console.log('❌ Student not found');
+        return res.status(404).json({ success: false, message: 'Student not found' });
+      }
 
       res.status(200).json({
         success: true,
         message: 'Student deactivated successfully',
-        data: student
+        data: { id }
       });
     }
   } catch (error) {
-    console.error('deleteStudent error:', error);
+    const elapsed = Date.now() - startTime;
+    console.error(`❌ deleteStudent error after ${elapsed}ms:`, error);
     res.status(400).json({ success: false, message: error.message });
   }
 };
 
 // Hostel Management
+/**
+ * Auto-generate rooms for a hostel with sequential numbering (01, 02, 03, etc.)
+ * @param {ObjectId} hostelId - The hostel ID
+ * @param {Number} totalRooms - Total number of rooms to create
+ * @param {Number} bedsPerRoom - Capacity per room
+ * @param {Number} floorsCount - Number of floors (not used in sequential numbering)
+ * @param {Number} level - Student level (100, 200, 300, 400, 500)
+ */
+async function autoGenerateRooms(hostelId, totalRooms, bedsPerRoom, floorsCount, level) {
+  const rooms = [];
+  
+  // Generate rooms with sequential numbering (01, 02, 03, etc.)
+  for (let i = 0; i < totalRooms; i++) {
+    const roomNumber = (i + 1).toString().padStart(2, '0'); // 01, 02, 03, etc.
+    const floor = Math.floor(i / 15) + 1; // Calculate floor (15 rooms per floor)
+    
+    rooms.push({
+      roomNumber: roomNumber,
+      hostel: hostelId,
+      capacity: bedsPerRoom,
+      currentOccupants: 0,
+      floor: floor,
+      level: level,
+      status: 'available',
+      isActive: true,
+      totalBunks: Math.floor(bedsPerRoom / 2),
+      availableSpaces: bedsPerRoom
+    });
+  }
+
+  // Bulk insert all rooms
+  await Room.insertMany(rooms);
+  
+  // Auto-create bunks for each room
+  const createdRooms = await Room.find({ hostel: hostelId });
+  const allBunks = [];
+  
+  for (const room of createdRooms) {
+    const numberOfBunks = Math.floor(room.capacity / 2);
+    for (let i = 1; i <= numberOfBunks; i++) {
+      allBunks.push({
+        bunkNumber: `B${i}`,
+        room: room._id,
+      });
+    }
+  }
+  
+  if (allBunks.length > 0) {
+    await Bunk.insertMany(allBunks);
+  }
+  
+  console.log(`Successfully created ${totalRooms} rooms with sequential numbering (01-${totalRooms.toString().padStart(2, '0')}) and bunks for hostel ${hostelId}`);
+}
+
 exports.createHostel = async (req, res) => {
   try {
     console.log('Creating hostel with data:', req.body);
     
     // Validate required fields
-    const { name, level, gender, totalRooms } = req.body;
+    const { 
+      name, 
+      level, 
+      gender, 
+      totalRooms, 
+      autoCreateRooms,
+      bedsPerRoom,
+      floorsCount 
+    } = req.body;
     
     if (!name) {
       return res.status(400).json({ 
@@ -755,13 +837,40 @@ exports.createHostel = async (req, res) => {
         message: 'Total rooms must be at least 1' 
       });
     }
+
+    // Validate auto-create fields if enabled
+    if (autoCreateRooms) {
+      if (!bedsPerRoom || Number(bedsPerRoom) < 2) {
+        return res.status(400).json({
+          success: false,
+          message: 'Beds per room must be at least 2'
+        });
+      }
+      if (!floorsCount || Number(floorsCount) < 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'Number of floors must be at least 1'
+        });
+      }
+    }
     
     const hostel = await Hostel.create(req.body);
     cacheService.del(cacheService.cacheKeys.hostelsByLevel(hostel.level));
     
+    // Auto-create rooms if requested
+    if (autoCreateRooms && totalRooms > 0 && bedsPerRoom > 0 && floorsCount > 0) {
+      await autoGenerateRooms(
+        hostel._id, 
+        Number(totalRooms), 
+        Number(bedsPerRoom), 
+        Number(floorsCount),
+        Number(level)
+      );
+    }
+    
     res.status(201).json({ 
       success: true, 
-      message: 'Hostel created successfully',
+      message: `Hostel created successfully${autoCreateRooms ? ` with ${totalRooms} rooms` : ''}`,
       data: hostel 
     });
   } catch (error) {
@@ -779,8 +888,30 @@ exports.createHostel = async (req, res) => {
 
 exports.getHostels = async (req, res) => {
   try {
-    const hostels = await Hostel.find({ isActive: true }).populate('portersAssigned');
-    res.status(200).json({ success: true, data: hostels });
+    const hostels = await Hostel.find({ isActive: true }).populate('portersAssigned').lean();
+
+    const hostelsWithStats = await Promise.all(
+      hostels.map(async (hostel) => {
+        // Sum capacity from all rooms in this hostel
+        const rooms = await Room.find({ hostel: hostel._id });
+        const totalCapacity = rooms.reduce((sum, room) => sum + room.capacity, 0);
+
+        // Live occupant count: confirmed reservations + checked-in students
+        const currentOccupants = await Student.countDocuments({
+          assignedHostel: hostel._id,
+          reservationStatus: { $in: ['confirmed', 'checked_in'] },
+        });
+
+        return {
+          ...hostel,
+          totalCapacity,
+          currentOccupants,
+          availableCapacity: Math.max(0, totalCapacity - currentOccupants),
+        };
+      })
+    );
+
+    res.status(200).json({ success: true, data: hostelsWithStats });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -940,7 +1071,23 @@ exports.deleteHostel = async (req, res) => {
 // Room Management
 exports.createRoom = async (req, res) => {
   try {
-    const room = await Room.create(req.body);
+    const { roomNumber, floor, capacity, level, hostel } = req.body;
+
+    // Validate floor if provided
+    if (floor !== undefined && floor < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Floor cannot be negative'
+      });
+    }
+
+    const room = await Room.create({
+      roomNumber,
+      floor,
+      capacity,
+      level,
+      hostel
+    });
     
     // Auto-create bunks based on capacity
     const numberOfBunks = Math.floor(room.capacity / 2);
@@ -981,8 +1128,16 @@ exports.updateRoom = async (req, res) => {
     console.log('Updating room with ID:', req.params.id);
     console.log('Update data:', req.body);
 
-    const { roomNumber, hostel, capacity, level } = req.body;
+    const { roomNumber, hostel, capacity, level, floor } = req.body;
     
+    // Validate floor if provided
+    if (floor !== undefined && floor < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Floor cannot be negative'
+      });
+    }
+
     // Check if room exists
     const existingRoom = await Room.findById(req.params.id);
     if (!existingRoom) {
@@ -1004,7 +1159,7 @@ exports.updateRoom = async (req, res) => {
 
     const updatedRoom = await Room.findByIdAndUpdate(
       req.params.id,
-      { roomNumber, hostel, capacity: newCapacity, level },
+      { roomNumber, hostel, capacity: newCapacity, level, floor },
       { new: true, runValidators: true }
     ).populate('hostel');
 
@@ -1760,5 +1915,58 @@ exports.search = async (req, res) => {
 
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * @desc    Reset student password (Admin)
+ * @route   PATCH /api/admin/students/:id/password
+ * @access  Private (Admin)
+ */
+exports.resetStudentPassword = async (req, res) => {
+  console.log('🔑 PASSWORD RESET STARTED for student:', req.params.id);
+  try {
+    const { id } = req.params;
+    const { newPassword } = req.body;
+
+    console.log('🔍 Finding student...');
+    const student = await Student.findById(id);
+
+    if (!student) {
+      console.log('❌ Student not found');
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    console.log('✅ Student found:', student.matricNo);
+
+    // If no new password provided, use default password (first name)
+    const password = newPassword || generateDefaultPassword(student.firstName);
+    console.log('📝 New password set (length):', password.length);
+
+    // Update password (will trigger bcrypt hashing in pre-save hook)
+    console.log('🔐 Starting password hash...');
+    const startTime = Date.now();
+    
+    student.password = password;
+    student.firstLogin = true; // Reset firstLogin flag
+    await student.save();
+    
+    const endTime = Date.now();
+    console.log(`✅ Password hashed and saved in ${endTime - startTime}ms`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset successfully',
+      defaultPassword: newPassword ? undefined : password,
+    });
+  } catch (error) {
+    console.error('❌ Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to reset password',
+    });
   }
 };
