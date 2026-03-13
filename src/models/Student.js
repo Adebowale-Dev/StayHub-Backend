@@ -45,6 +45,10 @@ const studentSchema = new mongoose.Schema({
     type: String,
     trim: true,
   },
+  profilePicture: {
+    type: String,
+    default: null,
+  },
   level: {
     type: Number,
     required: true,

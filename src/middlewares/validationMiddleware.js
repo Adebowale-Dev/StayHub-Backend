@@ -19,9 +19,12 @@ const handleValidationErrors = (req, res, next) => {
  * Validation rules for login
  */
 const validateLogin = [
-  body('identifier')
-    .notEmpty()
-    .withMessage('Email or matric number is required'),
+  body('identifier').custom((value, { req }) => {
+    if (!value && !req.body.matricNumber) {
+      throw new Error('Email or matric number is required');
+    }
+    return true;
+  }),
   body('password')
     .notEmpty()
     .withMessage('Password is required'),

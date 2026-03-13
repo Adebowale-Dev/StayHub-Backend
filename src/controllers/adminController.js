@@ -306,7 +306,10 @@ exports.deleteDepartment = async (req, res) => {
 // Student Management
 exports.createStudent = async (req, res) => {
   try {
-    const studentData = { ...req.body, password: generateDefaultPassword(req.body.firstName) };
+    const studentData = {
+      ...req.body,
+      password: req.body.password || generateDefaultPassword(req.body.firstName),
+    };
     const student = await Student.create(studentData);
     res.status(201).json({ success: true, data: student });
   } catch (error) {
@@ -568,17 +571,11 @@ exports.updateStudent = async (req, res) => {
     const { id } = req.params;
     const updateData = { ...req.body };
 
-    // Don't allow direct password updates through this endpoint
-    if (updateData.password) {
-      delete updateData.password;
-    }
+    delete updateData.password;
+    delete updateData.role;
+    delete updateData._id;
 
-    // Don't allow role changes
-    if (updateData.role) {
-      delete updateData.role;
-    }
-
-    // If changing gender, verify no active hostel assignment with wrong gender
+    // If changing gender, validate value early before any DB calls
     if (updateData.gender) {
       updateData.gender = updateData.gender.toLowerCase();
       if (!['male', 'female'].includes(updateData.gender)) {
@@ -589,21 +586,26 @@ exports.updateStudent = async (req, res) => {
       }
     }
 
-    const student = await Student.findById(id);
+    // Only fetch existing student when needed for validation
+    const needsExistingStudent = updateData.gender || updateData.matricNo || updateData.email;
 
-    if (!student) {
-      return res.status(404).json({ success: false, message: 'Student not found' });
+    let student = null;
+    if (needsExistingStudent) {
+      student = await Student.findById(id).select('gender matricNo email assignedHostel');
+      if (!student) {
+        return res.status(404).json({ success: false, message: 'Student not found' });
+      }
     }
 
     // If changing gender and student has hostel assignment, verify compatibility
-    if (updateData.gender && updateData.gender !== student.gender && student.assignedHostel) {
-      const hostel = await Hostel.findById(student.assignedHostel);
+    if (updateData.gender && student && updateData.gender !== student.gender && student.assignedHostel) {
+      const hostel = await Hostel.findById(student.assignedHostel).select('gender');
       if (hostel && hostel.gender !== 'mixed') {
         const isCompatible = (
           (updateData.gender === 'male' && hostel.gender === 'male') ||
           (updateData.gender === 'female' && hostel.gender === 'female')
         );
-        
+
         if (!isCompatible) {
           return res.status(400).json({
             success: false,
@@ -614,11 +616,11 @@ exports.updateStudent = async (req, res) => {
     }
 
     // Check if matricNo is being changed and if it's unique
-    if (updateData.matricNo && updateData.matricNo !== student.matricNo) {
-      const existingStudent = await Student.findOne({ 
+    if (updateData.matricNo && student && updateData.matricNo !== student.matricNo) {
+      const existingStudent = await Student.findOne({
         matricNo: updateData.matricNo,
         _id: { $ne: id }
-      });
+      }).select('_id');
 
       if (existingStudent) {
         return res.status(409).json({
@@ -629,11 +631,11 @@ exports.updateStudent = async (req, res) => {
     }
 
     // Check if email is being changed and if it's unique
-    if (updateData.email && updateData.email !== student.email) {
-      const existingStudent = await Student.findOne({ 
+    if (updateData.email && student && updateData.email !== student.email) {
+      const existingStudent = await Student.findOne({
         email: updateData.email,
         _id: { $ne: id }
-      });
+      }).select('_id');
 
       if (existingStudent) {
         return res.status(409).json({
@@ -643,12 +645,13 @@ exports.updateStudent = async (req, res) => {
       }
     }
 
-    // Update student
-    const updatedStudent = await Student.findByIdAndUpdate(
-      id,
-      updateData,
-      { new: true, runValidators: true }
-    )
+    const updateResult = await Student.updateOne({ _id: id }, { $set: updateData });
+
+    if (updateResult.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    const updatedStudent = await Student.findById(id)
       .populate('college', 'name code')
       .populate('department', 'name code')
       .populate('assignedHostel', 'name code')
@@ -1927,7 +1930,8 @@ exports.resetStudentPassword = async (req, res) => {
   console.log('🔑 PASSWORD RESET STARTED for student:', req.params.id);
   try {
     const { id } = req.params;
-    const { newPassword } = req.body;
+    const { newPassword, password } = req.body;
+    const providedPassword = newPassword || password;
 
     console.log('🔍 Finding student...');
     const student = await Student.findById(id);
@@ -1943,24 +1947,24 @@ exports.resetStudentPassword = async (req, res) => {
     console.log('✅ Student found:', student.matricNo);
 
     // If no new password provided, use default password (first name)
-    const password = newPassword || generateDefaultPassword(student.firstName);
-    console.log('📝 New password set (length):', password.length);
+    const resolvedPassword = providedPassword || generateDefaultPassword(student.firstName);
+    console.log('📝 New password set (length):', resolvedPassword.length);
 
     // Update password (will trigger bcrypt hashing in pre-save hook)
     console.log('🔐 Starting password hash...');
     const startTime = Date.now();
     
-    student.password = password;
+    student.password = resolvedPassword;
     student.firstLogin = true; // Reset firstLogin flag
     await student.save();
-    
+
     const endTime = Date.now();
     console.log(`✅ Password hashed and saved in ${endTime - startTime}ms`);
 
     res.status(200).json({
       success: true,
       message: 'Password reset successfully',
-      defaultPassword: newPassword ? undefined : password,
+      defaultPassword: providedPassword ? undefined : resolvedPassword,
     });
   } catch (error) {
     console.error('❌ Reset password error:', error);

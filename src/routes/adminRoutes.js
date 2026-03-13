@@ -1039,7 +1039,7 @@ router.get('/students/female', adminController.getFemaleStudents);
  *         description: Student not found
  */
 router.patch('/students/:id/password', adminController.resetStudentPassword);
-router.put('/students/:id', validateMongoId, adminController.updateStudent);
+router.put('/students/:id', validateMongoId('id'), adminController.updateStudent);
 
 /**
  * @swagger
@@ -1090,7 +1090,7 @@ router.put('/students/:id', validateMongoId, adminController.updateStudent);
  *       500:
  *         description: Server error
  */
-router.delete('/students/:id', validateMongoId, adminController.deleteStudent);
+router.delete('/students/:id', validateMongoId('id'), adminController.deleteStudent);
 
 // Alternative force delete endpoint (for when regular delete times out)
 router.post('/students/:id/force-delete', async (req, res) => {

@@ -252,7 +252,13 @@ const options = {
       },
     ],
   },
-  apis: ['./src/routes/*.js'], // Path to the API routes
+  apis: [
+    './src/routes/authRoutes.js',
+    './src/routes/studentRoutes.js',
+    './src/routes/adminRoutes.js',
+    './src/routes/porterRoutes.js',
+    './src/routes/paymentRoutes.js',
+  ],
 };
 
 const swaggerSpec = swaggerJsdoc(options);

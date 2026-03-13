@@ -12,7 +12,8 @@ const emailService = require('../services/emailService');
  */
 const login = async (req, res) => {
   try {
-    const { identifier, password } = req.body;
+    const { password } = req.body;
+    const identifier = req.body.identifier || req.body.matricNumber;
 
     let user, role;
 
@@ -35,6 +36,14 @@ const login = async (req, res) => {
               success: false,
               message: 'Your application is still pending approval',
             });
+          }
+        } else {
+          // Try student by email
+          user = await Student.findOne({ email: identifier.toLowerCase() })
+            .populate('college', 'name code')
+            .populate('department', 'name code');
+          if (user) {
+            role = 'student';
           }
         }
       }

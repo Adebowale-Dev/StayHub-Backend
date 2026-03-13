@@ -199,6 +199,37 @@ exports.updateProfile = async (req, res) => {
 };
 
 /**
+ * @desc    Upload / replace profile picture
+ * @route   POST /api/student/profile/picture
+ * @access  Private (Student)
+ */
+exports.uploadProfilePicture = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No image file provided' });
+    }
+
+    const pictureUrl = `${req.protocol}://${req.get('host')}/uploads/profile-pictures/${req.file.filename}`;
+
+    const student = await Student.findByIdAndUpdate(
+      req.user._id,
+      { profilePicture: pictureUrl },
+      { new: true }
+    )
+      .select('-password')
+      .populate('college', 'name code')
+      .populate('department', 'name code')
+      .populate('assignedHostel', 'name')
+      .populate('assignedRoom', 'roomNumber')
+      .populate('assignedBunk', 'bunkNumber');
+
+    res.status(200).json({ data: { student } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
  * @desc    Get available hostels for student's level
  * @route   GET /api/student/hostels
  * @access  Private (Student)
@@ -747,6 +778,63 @@ exports.getDashboard = async (req, res) => {
 };
 
 /**
+ * @desc    Get contextual alerts for the authenticated student
+ * @route   GET /api/student/alerts
+ * @access  Private (Student)
+ */
+exports.getAlerts = async (req, res) => {
+  try {
+    const student = await Student.findById(req.user._id);
+    const alerts = [];
+    let id = 1;
+
+    // Warn when a confirmed reservation is approaching expiry
+    if (student.reservationStatus === 'confirmed' && student.reservationExpiresAt) {
+      const msLeft = new Date(student.reservationExpiresAt) - Date.now();
+      const hoursLeft = Math.ceil(msLeft / (1000 * 60 * 60));
+      if (hoursLeft > 0) {
+        alerts.push({
+          _id: String(id++),
+          type: 'warning',
+          icon: 'clock-alert-outline',
+          message: `Reservation expires in ${hoursLeft}h`,
+        });
+      }
+    }
+
+    // Inform about the next check-in window (next Monday 9am) for confirmed reservations
+    if (student.reservationStatus === 'confirmed') {
+      const now = new Date();
+      const day = now.getDay(); // 0=Sun … 6=Sat
+      const daysToMonday = (8 - day) % 7 || 7;
+      const nextMonday = new Date(now);
+      nextMonday.setDate(now.getDate() + daysToMonday);
+      const dayName = nextMonday.toLocaleDateString('en-US', { weekday: 'long' });
+      alerts.push({
+        _id: String(id++),
+        type: 'info',
+        icon: 'calendar-clock',
+        message: `Check-in opens ${dayName} 9am`,
+      });
+    }
+
+    // Flag missing emergency contact
+    if (!student.emergencyContact) {
+      alerts.push({
+        _id: String(id++),
+        type: 'error',
+        icon: 'account-alert',
+        message: 'Complete profile: add emergency contact',
+      });
+    }
+
+    res.status(200).json({ data: alerts });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
  * @desc    Create room reservation (Alternative endpoint for frontend compatibility)
  * @route   POST /api/student/reservations
  * @access  Private (Student)
@@ -789,8 +877,8 @@ exports.createReservation = async (req, res) => {
       });
     }
 
-    // 4. Validate hostel matches
-    if (room.hostel._id.toString() !== hostelId) {
+    // 4. Validate hostel matches (only when hostelId is provided)
+    if (hostelId && room.hostel._id.toString() !== hostelId) {
       return res.status(400).json({
         success: false,
         message: 'Room does not belong to the selected hostel'
@@ -982,6 +1070,160 @@ exports.createReservation = async (req, res) => {
       success: false,
       message: 'Server error while creating reservation',
       error: error.message
+    });
+  }
+};
+
+/**
+ * @desc    Add members to an existing reservation by matric number
+ * @route   POST /api/student/reservation/members
+ * @access  Private (Student)
+ */
+exports.addGroupMembers = async (req, res) => {
+  try {
+    const student = req.user;
+    const { matrics } = req.body;
+
+    // 1. Student must have an active reservation
+    if (student.reservationStatus !== 'confirmed' && student.reservationStatus !== 'checked_in') {
+      return res.status(400).json({
+        success: false,
+        message: 'You must have an active reservation before adding group members',
+      });
+    }
+
+    if (!matrics || !Array.isArray(matrics) || matrics.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide an array of matric numbers',
+      });
+    }
+
+    // 2. Load the student's room
+    const room = await Room.findById(student.assignedRoom).populate('hostel');
+    if (!room) {
+      return res.status(404).json({
+        success: false,
+        message: 'Your assigned room could not be found',
+      });
+    }
+
+    // 3. Check enough spaces remain
+    const availableSpace = room.capacity - room.currentOccupants;
+    if (availableSpace < matrics.length) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient space. Room has ${availableSpace} available space(s), but ${matrics.length} needed.`,
+      });
+    }
+
+    // 4. Validate each matric
+    const upperMatrics = matrics.map(m => m.toUpperCase().trim());
+    const newMembers = await Student.find({ matricNo: { $in: upperMatrics } });
+
+    if (newMembers.length !== upperMatrics.length) {
+      const foundMatrics = newMembers.map(s => s.matricNo);
+      const missing = upperMatrics.filter(m => !foundMatrics.includes(m));
+      return res.status(404).json({
+        success: false,
+        message: `Matric number(s) not found: ${missing.join(', ')}`,
+      });
+    }
+
+    for (const member of newMembers) {
+      // Not already in this room
+      if (member.assignedRoom && member.assignedRoom.toString() === room._id.toString()) {
+        return res.status(400).json({
+          success: false,
+          message: `${member.firstName} ${member.lastName} (${member.matricNo}) is already in this room`,
+        });
+      }
+
+      // No conflicting active reservation
+      if (member.reservationStatus === 'confirmed' || member.reservationStatus === 'checked_in') {
+        return res.status(400).json({
+          success: false,
+          message: `${member.firstName} ${member.lastName} already has an active reservation`,
+        });
+      }
+
+      // Must have paid
+      if (member.paymentStatus !== 'paid') {
+        return res.status(400).json({
+          success: false,
+          message: `${member.firstName} ${member.lastName} has not completed payment`,
+        });
+      }
+    }
+
+    // 5. Assign a bunk to each new member and update records
+    const groupMembers = [];
+
+    for (const member of newMembers) {
+      const bunk = await Bunk.findOne({ room: room._id, status: 'available', isActive: true });
+
+      if (!bunk) {
+        return res.status(400).json({
+          success: false,
+          message: 'Not enough available bunks in the room',
+        });
+      }
+
+      bunk.status = 'reserved';
+      bunk.occupiedByStudent = member._id;
+      bunk.reservedUntil = student.reservationExpiresAt;
+      await bunk.save();
+
+      const otherNewMemberIds = newMembers
+        .filter(m => m._id.toString() !== member._id.toString())
+        .map(m => m._id);
+
+      member.assignedHostel = room.hostel._id;
+      member.assignedRoom = room._id;
+      member.assignedBunk = bunk._id;
+      member.reservationStatus = 'confirmed';
+      member.reservedAt = new Date();
+      member.reservationExpiresAt = student.reservationExpiresAt;
+      member.roommates = [student._id, ...otherNewMemberIds];
+      await member.save();
+
+      // 6. Increment currentOccupants for each member added
+      room.currentOccupants += 1;
+      await room.save();
+
+      groupMembers.push({
+        id: member._id,
+        matricNo: member.matricNo,
+        name: `${member.firstName} ${member.lastName}`,
+        bunk: bunk.bunkNumber,
+      });
+    }
+
+    // 7. Add new members to requesting student's roommates list
+    const existingIds = new Set(student.roommates.map(id => id.toString()));
+    const newRoommateIds = newMembers
+      .map(m => m._id)
+      .filter(id => !existingIds.has(id.toString()));
+
+    student.roommates = [...student.roommates, ...newRoommateIds];
+    await student.save();
+
+    await room.updateStatus();
+    cacheService.del(cacheService.cacheKeys.availableRooms(student.level));
+
+    res.status(200).json({
+      success: true,
+      message: `${groupMembers.length} member(s) added to your reservation`,
+      data: {
+        groupMembers,
+        totalInRoom: room.currentOccupants,
+      },
+    });
+  } catch (error) {
+    console.error('Add group members error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Server error while adding group members',
     });
   }
 };

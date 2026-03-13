@@ -58,38 +58,35 @@ const initializePayment = async (req, res) => {
       },
     });
 
-    // Create payment record
-    const paymentCode = generatePaymentCode();
-    console.log('💳 Creating payment record:');
-    console.log('   Payment Code:', paymentCode);
-    console.log('   Reference:', reference);
-    console.log('   Amount:', paymentAmount);
-    console.log('   Student ID:', student._id);
-    
-    const payment = await Payment.create({
+    // Reuse existing pending payment — keeps the same code so student has one consistent code
+    let payment = await Payment.findOne({
       student: student._id,
-      amount: paymentAmount,
-      paymentReference: reference,
-      paymentCode: paymentCode,
       status: 'pending',
-      semester: getCurrentSemester(),
-      academicYear: getCurrentAcademicYear(),
-    });
+    }).sort({ createdAt: -1 });
 
-    console.log('✅ Payment record created in database:');
-    console.log('   Payment ID:', payment._id);
-    console.log('   Payment Code (saved):', payment.paymentCode);
-    console.log('   Status:', payment.status);
+    if (payment) {
+      // Update reference to match this new Paystack transaction
+      payment.paymentReference = reference;
+      payment.amount = paymentAmount;
+      await payment.save();
+    } else {
+      payment = await Payment.create({
+        student: student._id,
+        amount: paymentAmount,
+        paymentReference: reference,
+        paymentCode: generatePaymentCode(),
+        status: 'pending',
+        semester: getCurrentSemester(),
+        academicYear: getCurrentAcademicYear(),
+      });
+    }
 
-    // 🔥 Send payment code email immediately
+    // Send payment code to student email
     try {
-      console.log('📧 Sending payment code email...');
-      await notificationService.sendPaymentCode(student._id, paymentCode, reference);
-      console.log('✅ Payment code email sent to:', student.email);
+      await notificationService.sendPaymentCode(student._id, payment.paymentCode, reference);
     } catch (emailError) {
-      console.error('⚠️ Failed to send payment code email:', emailError.message);
-      console.error('   Error details:', emailError);
-      // Continue anyway - student can still complete payment
+      console.error('Failed to send payment code email:', emailError.message);
+      // Continue — student can request resend from verify page
     }
 
     res.status(200).json({
@@ -523,7 +520,7 @@ const handlePaystackCallback = async (req, res) => {
 
       // Redirect to verification page (NOT success page)
       // Student must enter the code from their email to complete verification
-      return res.redirect(`${config.FRONTEND_URL}/student/payment/verify?reference=${paymentReference}&message=Payment successful! Check your email for verification code`);
+      return res.redirect(`${config.FRONTEND_URL}/student/payment/verify?reference=${paymentReference}&message=Payment successful! Check your email for the verification code`);
     } else {
       console.log('❌ Payment failed on Paystack. Status:', paymentData.status);
       payment.status = 'failed';
@@ -819,6 +816,51 @@ const verifyPaymentCode = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Resend payment code to student email
+ * @route   POST /api/student/payment/resend-code
+ * @access  Private (Student)
+ */
+const resendPaymentCode = async (req, res) => {
+  try {
+    const student = req.user;
+
+    if (student.paymentStatus === 'paid') {
+      return res.status(400).json({
+        success: false,
+        message: 'Your payment is already verified',
+      });
+    }
+
+    // Find the most recent pending payment for this student
+    const payment = await Payment.findOne({
+      student: student._id,
+      status: 'pending',
+    }).sort({ createdAt: -1 });
+
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: 'No pending payment found. Please initialize a payment first.',
+      });
+    }
+
+    // Resend the code
+    await notificationService.sendPaymentCode(student._id, payment.paymentCode, payment.paymentReference);
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment code has been sent to your email',
+    });
+  } catch (error) {
+    console.error('Resend payment code error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to resend payment code',
+    });
+  }
+};
+
 module.exports = {
   initializePayment,
   verifyPayment,
@@ -829,4 +871,5 @@ module.exports = {
   getPaymentStats,
   handlePaystackCallback,
   verifyPaymentCode,
+  resendPaymentCode,
 };

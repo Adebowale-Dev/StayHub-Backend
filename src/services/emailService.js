@@ -1,28 +1,25 @@
 const nodemailer = require('nodemailer');
 const config = require('../config/env');
 
-// Create transporter
-const transporter = nodemailer.createTransport({
-  host: config.EMAIL_HOST,
-  port: config.EMAIL_PORT,
-  secure: config.EMAIL_PORT === 465, // true only for port 465
-  requireTLS: config.EMAIL_PORT === 587, // force STARTTLS on port 587
-  auth: {
-    user: config.EMAIL_USER,
-    pass: config.EMAIL_PASSWORD,
-  },
-  tls: {
-    rejectUnauthorized: false, // allow self-signed certs in development
-  },
-});
-
-// Verify transporter on startup
-transporter.verify((error) => {
-  if (error) {
-    console.error('❌ Email service misconfigured:', error.message);
-  } else {
-    console.log('✅ Email service ready — connected to', config.EMAIL_HOST);
+// Parse sender name and email from EMAIL_FROM (format: "Name <email>")
+const parseSender = () => {
+  const from = config.EMAIL_FROM || 'StayHub <adebowale235@gmail.com>';
+  const match = from.match(/^(.*?)\s*<(.+)>$/);
+  if (match) {
+    return { name: match[1].trim(), email: match[2].trim() };
   }
+  return { name: 'StayHub', email: from.trim() };
+};
+
+const sender = parseSender();
+
+// Initialize Nodemailer transporter with Gmail
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: config.GMAIL_USER,
+    pass: config.GMAIL_APP_PASSWORD,
+  },
 });
 
 /**
@@ -35,22 +32,16 @@ transporter.verify((error) => {
  */
 const sendEmail = async (options) => {
   try {
-    // Gmail requires the authenticated account as the envelope sender.
-    // Display name from EMAIL_FROM is kept, but the actual address must be EMAIL_USER.
-    const displayName = config.EMAIL_FROM
-      ? config.EMAIL_FROM.replace(/<.*>/, '').trim()
-      : 'StayHub';
-    const mailOptions = {
-      from: `${displayName} <${config.EMAIL_USER}>`,
+    const result = await transporter.sendMail({
+      from: `"${sender.name}" <${sender.email}>`,
       to: options.to,
       subject: options.subject,
       html: options.html,
       text: options.text,
-    };
+    });
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Email sent:', info.messageId);
-    return { success: true, messageId: info.messageId };
+    console.log('Email sent:', result.messageId);
+    return { success: true, messageId: result.messageId };
   } catch (error) {
     console.error('Error sending email:', error);
     throw error;
@@ -61,9 +52,8 @@ const sendEmail = async (options) => {
  * Send payment confirmation email
  */
 const sendPaymentConfirmation = async (student, payment) => {
-  const { formatDateTime } = require('../utils/dateUtils');
   const html = require('./emailTemplates').paymentConfirmation(student, payment);
-  
+
   return await sendEmail({
     to: student.email,
     subject: 'Payment Successful - StayHub',
@@ -76,7 +66,7 @@ const sendPaymentConfirmation = async (student, payment) => {
  */
 const sendReservationConfirmation = async (student, room, bunk, hostel) => {
   const html = require('./emailTemplates').reservationConfirmation(student, room, bunk, hostel);
-  
+
   return await sendEmail({
     to: student.email,
     subject: 'Room Reservation Confirmed - StayHub',
@@ -89,7 +79,7 @@ const sendReservationConfirmation = async (student, room, bunk, hostel) => {
  */
 const sendRoommateNotification = async (student, reservedBy, room, hostel) => {
   const html = require('./emailTemplates').roommateNotification(student, reservedBy, room, hostel);
-  
+
   return await sendEmail({
     to: student.email,
     subject: 'Room Reserved for You - StayHub',
@@ -103,7 +93,7 @@ const sendRoommateNotification = async (student, reservedBy, room, hostel) => {
 const sendPasswordResetEmail = async (email, resetToken) => {
   const resetUrl = `${config.FRONTEND_URL}/reset-password?token=${resetToken}`;
   const html = require('./emailTemplates').passwordReset(resetUrl);
-  
+
   return await sendEmail({
     to: email,
     subject: 'Password Reset Request - StayHub',
@@ -116,7 +106,7 @@ const sendPasswordResetEmail = async (email, resetToken) => {
  */
 const sendPorterWelcomeEmail = async (porter, hostel) => {
   const html = require('./emailTemplates').porterWelcome(porter, hostel);
-  
+
   return await sendEmail({
     to: porter.email,
     subject: 'Welcome to StayHub - Porter Account Approved',
@@ -129,7 +119,7 @@ const sendPorterWelcomeEmail = async (porter, hostel) => {
  */
 const sendDailyReservationsSummary = async (porter, reservations) => {
   const html = require('./emailTemplates').dailyReservationsSummary(porter, reservations);
-  
+
   return await sendEmail({
     to: porter.email,
     subject: 'Daily Reservations Summary - StayHub',
@@ -142,7 +132,7 @@ const sendDailyReservationsSummary = async (porter, reservations) => {
  */
 const sendApplicationReceivedEmail = async (email, firstName) => {
   const html = require('./emailTemplates').applicationReceived(firstName);
-  
+
   return await sendEmail({
     to: email,
     subject: 'Porter Application Received - StayHub',
@@ -154,14 +144,14 @@ const sendApplicationReceivedEmail = async (email, firstName) => {
  * Send bulk email
  */
 const sendBulkEmail = async (recipients, subject, html) => {
-  const promises = recipients.map(recipient => 
+  const promises = recipients.map(recipient =>
     sendEmail({
       to: recipient,
       subject,
       html,
     })
   );
-  
+
   return await Promise.allSettled(promises);
 };
 

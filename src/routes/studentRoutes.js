@@ -5,6 +5,7 @@ const paymentController = require('../controllers/paymentController');
 const { protect } = require('../middlewares/authMiddleware');
 const { studentOnly, checkStudentPayment } = require('../middlewares/roleMiddleware');
 const { validateReservation } = require('../middlewares/validationMiddleware');
+const { uploadProfilePicture } = require('../middlewares/uploadMiddleware');
 
 /**
  * @swagger
@@ -125,6 +126,45 @@ router.patch('/profile', studentController.updateProfile);
 
 /**
  * @swagger
+ * /api/student/profile/picture:
+ *   post:
+ *     summary: Upload or replace profile picture
+ *     tags: [Student]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - picture
+ *             properties:
+ *               picture:
+ *                 type: string
+ *                 format: binary
+ *                 description: JPEG, PNG, or WebP image (max 5 MB)
+ *     responses:
+ *       200:
+ *         description: Profile picture updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     student:
+ *                       type: object
+ *       400:
+ *         description: Missing file or invalid type / size
+ */
+router.post('/profile/picture', uploadProfilePicture, studentController.uploadProfilePicture);
+
+/**
+ * @swagger
  * /api/student/dashboard:
  *   get:
  *     summary: Get student dashboard
@@ -145,6 +185,44 @@ router.patch('/profile', studentController.updateProfile);
  *                   type: object
  */
 router.get('/dashboard', studentController.getDashboard);
+
+/**
+ * @swagger
+ * /api/student/alerts:
+ *   get:
+ *     summary: Get contextual alerts for the student
+ *     tags: [Student]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of active alerts
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       _id:
+ *                         type: string
+ *                         example: "1"
+ *                       type:
+ *                         type: string
+ *                         enum: [warning, info, error]
+ *                         example: warning
+ *                       icon:
+ *                         type: string
+ *                         description: MaterialCommunityIcons name
+ *                         example: clock-alert-outline
+ *                       message:
+ *                         type: string
+ *                         example: "Reservation expires in 18h"
+ */
+router.get('/alerts', studentController.getAlerts);
 
 /**
  * @swagger
@@ -305,6 +383,39 @@ router.get('/reservation', studentController.getReservation);
 
 /**
  * @swagger
+ * /api/student/reservation/members:
+ *   post:
+ *     summary: Add members to an existing reservation by matric number
+ *     tags: [Student]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - matrics
+ *             properties:
+ *               matrics:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Array of matric numbers to add to the reservation
+ *                 example: ["BU22CSC1061", "BU22CSC1062"]
+ *     responses:
+ *       200:
+ *         description: Members added successfully
+ *       400:
+ *         description: Validation error (no reservation, already in room, insufficient space, etc.)
+ *       404:
+ *         description: Matric number(s) not found
+ */
+router.post('/reservation/members', studentController.addGroupMembers);
+
+/**
+ * @swagger
  * /api/student/payment/amount:
  *   get:
  *     summary: Get current hostel payment amount
@@ -438,5 +549,7 @@ router.post('/payment/initialize', paymentController.initializePayment);
  *         description: Invalid payment code
  */
 router.post('/payment/verify-code', paymentController.verifyPaymentCode);
+
+router.post('/payment/resend-code', paymentController.resendPaymentCode);
 
 module.exports = router;
