@@ -1,9 +1,5 @@
 const { formatDateTime } = require('../utils/dateUtils');
 const config = require('../config/env');
-
-/**
- * Base email template
- */
 const baseTemplate = (content) => `
 <!DOCTYPE html>
 <html lang="en">
@@ -77,12 +73,8 @@ const baseTemplate = (content) => `
 </body>
 </html>
 `;
-
-/**
- * Payment confirmation email
- */
 const paymentConfirmation = (student, payment) => {
-  const content = `
+    const content = `
     <h2>Payment Successful! 🎉</h2>
     <p>Dear ${student.firstName} ${student.lastName},</p>
     <p>Your payment has been successfully processed. Here are your payment details:</p>
@@ -104,15 +96,10 @@ const paymentConfirmation = (student, payment) => {
     
     <p>Best regards,<br>StayHub Team</p>
   `;
-  
-  return baseTemplate(content);
+    return baseTemplate(content);
 };
-
-/**
- * Reservation confirmation email
- */
 const reservationConfirmation = (student, room, bunk, hostel) => {
-  const content = `
+    const content = `
     <h2>Room Reservation Confirmed! 🏠</h2>
     <p>Dear ${student.firstName} ${student.lastName},</p>
     <p>Your room reservation has been confirmed. Here are your accommodation details:</p>
@@ -139,18 +126,13 @@ const reservationConfirmation = (student, room, bunk, hostel) => {
     
     <p>Best regards,<br>StayHub Team</p>
   `;
-  
-  return baseTemplate(content);
+    return baseTemplate(content);
 };
-
-/**
- * Roommate notification email
- */
 const roommateNotification = (student, reservedBy, room, hostel, expiresAt) => {
-  const approvalDeadline = expiresAt
-    ? formatDateTime(expiresAt)
-    : `${config.RESERVATION_EXPIRY_HOURS} hours`;
-  const content = `
+    const approvalDeadline = expiresAt
+        ? formatDateTime(expiresAt)
+        : `${config.RESERVATION_EXPIRY_HOURS} hours`;
+    const content = `
     <h2>Room Reserved for You! 👥</h2>
     <p>Dear ${student.firstName} ${student.lastName},</p>
     <p><strong>${reservedBy.firstName} ${reservedBy.lastName}</strong> has reserved a room space for you.</p>
@@ -172,22 +154,16 @@ const roommateNotification = (student, reservedBy, room, hostel, expiresAt) => {
     
     <p>Best regards,<br>StayHub Team</p>
   `;
-  
-  return baseTemplate(content);
+    return baseTemplate(content);
 };
-
-/**
- * Invitation status update email
- */
 const invitationStatusUpdate = (inviter, invitee, room, hostel, action, notes) => {
-  const actionLabels = {
-    approved: 'approved',
-    rejected: 'rejected',
-    expired: 'expired',
-  };
-
-  const actionLabel = actionLabels[action] || action;
-  const content = `
+    const actionLabels = {
+        approved: 'approved',
+        rejected: 'rejected',
+        expired: 'expired',
+    };
+    const actionLabel = actionLabels[action] || action;
+    const content = `
     <h2>Invitation Update</h2>
     <p>Dear ${inviter.firstName} ${inviter.lastName},</p>
     <p><strong>${invitee.firstName} ${invitee.lastName}</strong> has ${actionLabel} the room invitation you created.</p>
@@ -203,15 +179,10 @@ const invitationStatusUpdate = (inviter, invitee, room, hostel, action, notes) =
 
     <p>Best regards,<br>StayHub Team</p>
   `;
-
-  return baseTemplate(content);
+    return baseTemplate(content);
 };
-
-/**
- * Password reset email
- */
 const passwordReset = (resetUrl) => {
-  const content = `
+    const content = `
     <h2>Password Reset Request</h2>
     <p>You requested to reset your password.</p>
     <p>Click the button below to reset your password. This link will expire in 1 hour.</p>
@@ -222,15 +193,10 @@ const passwordReset = (resetUrl) => {
     
     <p>Best regards,<br>StayHub Team</p>
   `;
-  
-  return baseTemplate(content);
+    return baseTemplate(content);
 };
-
-/**
- * Porter welcome email
- */
 const porterWelcome = (porter, hostel) => {
-  const content = `
+    const content = `
     <h2>Welcome to StayHub! 👋</h2>
     <p>Dear ${porter.firstName} ${porter.lastName},</p>
     <p>Your porter application has been approved. Welcome to the StayHub team!</p>
@@ -255,15 +221,10 @@ const porterWelcome = (porter, hostel) => {
     
     <p>Best regards,<br>StayHub Team</p>
   `;
-  
-  return baseTemplate(content);
+    return baseTemplate(content);
 };
-
-/**
- * Daily reservations summary email for porter
- */
 const dailyReservationsSummary = (porter, reservations) => {
-  const content = `
+    const content = `
     <h2>Daily Reservations Summary 📋</h2>
     <p>Dear ${porter.firstName} ${porter.lastName},</p>
     <p>Here is today's reservations summary for ${porter.assignedHostel ? porter.assignedHostel.name : 'your hostel'}:</p>
@@ -301,15 +262,10 @@ const dailyReservationsSummary = (porter, reservations) => {
     
     <p>Best regards,<br>StayHub Team</p>
   `;
-  
-  return baseTemplate(content);
+    return baseTemplate(content);
 };
-
-/**
- * Application received email
- */
 const applicationReceived = (firstName) => {
-  const content = `
+    const content = `
     <h2>Application Received! ✅</h2>
     <p>Dear ${firstName},</p>
     <p>Thank you for applying to become a porter at StayHub.</p>
@@ -328,17 +284,15 @@ const applicationReceived = (firstName) => {
     
     <p>Best regards,<br>StayHub Team</p>
   `;
-  
-  return baseTemplate(content);
+    return baseTemplate(content);
 };
-
 module.exports = {
-  paymentConfirmation,
-  reservationConfirmation,
-  roommateNotification,
-  invitationStatusUpdate,
-  passwordReset,
-  porterWelcome,
-  dailyReservationsSummary,
-  applicationReceived,
+    paymentConfirmation,
+    reservationConfirmation,
+    roommateNotification,
+    invitationStatusUpdate,
+    passwordReset,
+    porterWelcome,
+    dailyReservationsSummary,
+    applicationReceived,
 };

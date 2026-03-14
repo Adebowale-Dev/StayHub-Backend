@@ -1,69 +1,59 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-
 const adminSchema = new mongoose.Schema({
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-    lowercase: true,
-    trim: true,
-  },
-  password: {
-    type: String,
-    required: true,
-  },
-  firstName: {
-    type: String,
-    required: true,
-  },
-  lastName: {
-    type: String,
-    required: true,
-  },
-  role: {
-    type: String,
-    default: 'admin',
-    immutable: true,
-  },
-  isActive: {
-    type: Boolean,
-    default: true,
-  },
-  lastLogin: {
-    type: Date,
-  },
+    email: {
+        type: String,
+        required: true,
+        unique: true,
+        lowercase: true,
+        trim: true,
+    },
+    password: {
+        type: String,
+        required: true,
+    },
+    firstName: {
+        type: String,
+        required: true,
+    },
+    lastName: {
+        type: String,
+        required: true,
+    },
+    role: {
+        type: String,
+        default: 'admin',
+        immutable: true,
+    },
+    isActive: {
+        type: Boolean,
+        default: true,
+    },
+    lastLogin: {
+        type: Date,
+    },
 }, {
-  timestamps: true,
+    timestamps: true,
 });
-
-// Indexes for performance
-// Note: email already has index from unique: true
 adminSchema.index({ isActive: 1 });
-
-// Hash password before saving
-adminSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-  
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (error) {
-    next(error);
-  }
+adminSchema.pre('save', async function (next) {
+    if (!this.isModified('password'))
+        return next();
+    try {
+        const salt = await bcrypt.genSalt(10);
+        this.password = await bcrypt.hash(this.password, salt);
+        next();
+    }
+    catch (error) {
+        next(error);
+    }
 });
-
-// Method to compare passwords
-adminSchema.methods.comparePassword = async function(candidatePassword) {
-  return await bcrypt.compare(candidatePassword, this.password);
+adminSchema.methods.comparePassword = async function (candidatePassword) {
+    return await bcrypt.compare(candidatePassword, this.password);
 };
-
-// Remove password from JSON output
-adminSchema.methods.toJSON = function() {
-  const obj = this.toObject();
-  delete obj.password;
-  return obj;
+adminSchema.methods.toJSON = function () {
+    const obj = this.toObject();
+    delete obj.password;
+    return obj;
 };
-
 module.exports = mongoose.model('Admin', adminSchema);
