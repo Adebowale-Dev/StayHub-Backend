@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const authController = require('../controllers/authController');
 const studentController = require('../controllers/studentController');
 const paymentController = require('../controllers/paymentController');
 const { protect } = require('../middlewares/authMiddleware');
@@ -59,6 +60,9 @@ router.get('/payment/verify/:reference', paymentController.verifyPayment);
 
 // Apply auth middleware to all routes below
 router.use(protect, studentOnly);
+
+router.get('/profile', authController.getProfile);
+router.put('/profile', authController.updateProfile);
 
 /**
  * @swagger
@@ -223,6 +227,13 @@ router.get('/dashboard', studentController.getDashboard);
  *                         example: "Reservation expires in 18h"
  */
 router.get('/alerts', studentController.getAlerts);
+router.get('/notifications', studentController.getNotifications);
+router.post('/notifications/read', studentController.markNotificationsRead);
+router.get('/notifications/settings', studentController.getNotificationSettings);
+router.patch('/notifications/preferences', studentController.updateNotificationPreferences);
+router.post('/notifications/devices', studentController.registerPushDevice);
+router.delete('/notifications/devices', studentController.unregisterPushDevice);
+router.get('/invitations/history', studentController.getInvitationHistory);
 
 /**
  * @swagger
@@ -364,6 +375,7 @@ router.post('/reserve', validateReservation, studentController.reserveRoom);
  *         description: Payment required
  */
 router.post('/reservations', studentController.createReservation);
+router.delete('/reservations/:reservationId', studentController.cancelReservation);
 
 /**
  * @swagger
@@ -380,6 +392,7 @@ router.post('/reservations', studentController.createReservation);
  *         description: No reservation found
  */
 router.get('/reservation', studentController.getReservation);
+router.post('/reservation/respond', studentController.respondToReservationInvite);
 
 /**
  * @swagger
@@ -413,6 +426,7 @@ router.get('/reservation', studentController.getReservation);
  *         description: Matric number(s) not found
  */
 router.post('/reservation/members', studentController.addGroupMembers);
+router.patch('/reservations/:reservationId/members', studentController.addGroupMembers);
 
 /**
  * @swagger
@@ -518,6 +532,7 @@ router.get('/payment/status', paymentController.getPaymentStatus);
  *         description: Already paid or payment amount not set
  */
 router.post('/payment/initialize', paymentController.initializePayment);
+router.post('/payment/verify', paymentController.verifyPayment);
 
 /**
  * @swagger

@@ -78,6 +78,7 @@ router.post('/login', validateLogin, authController.login);
  *         description: Reset link sent to email
  */
 router.post('/forgot-password', authController.forgotPassword);
+router.post('/reset-password', authController.resetPassword);
 
 // Protected routes
 router.use(protect);

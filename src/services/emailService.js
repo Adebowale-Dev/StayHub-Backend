@@ -77,12 +77,32 @@ const sendReservationConfirmation = async (student, room, bunk, hostel) => {
 /**
  * Send roommate notification email
  */
-const sendRoommateNotification = async (student, reservedBy, room, hostel) => {
-  const html = require('./emailTemplates').roommateNotification(student, reservedBy, room, hostel);
+const sendRoommateNotification = async (student, reservedBy, room, hostel, expiresAt) => {
+  const html = require('./emailTemplates').roommateNotification(student, reservedBy, room, hostel, expiresAt);
 
   return await sendEmail({
     to: student.email,
-    subject: 'Room Reserved for You - StayHub',
+    subject: 'Room Invitation Pending Your Approval - StayHub',
+    html,
+  });
+};
+
+/**
+ * Send invitation status update email to inviter
+ */
+const sendInvitationStatusUpdate = async (inviter, invitee, room, hostel, action, notes) => {
+  const html = require('./emailTemplates').invitationStatusUpdate(
+    inviter,
+    invitee,
+    room,
+    hostel,
+    action,
+    notes
+  );
+
+  return await sendEmail({
+    to: inviter.email,
+    subject: `Room Invitation ${String(action).replace('_', ' ')} - StayHub`,
     html,
   });
 };
@@ -160,6 +180,7 @@ module.exports = {
   sendPaymentConfirmation,
   sendReservationConfirmation,
   sendRoommateNotification,
+  sendInvitationStatusUpdate,
   sendPasswordResetEmail,
   sendPorterWelcomeEmail,
   sendDailyReservationsSummary,

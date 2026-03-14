@@ -5,11 +5,274 @@ const Hostel = require('../models/Hostel');
 const Room = require('../models/Room');
 const Bunk = require('../models/Bunk');
 const Porter = require('../models/Porter');
+const NotificationCampaign = require('../models/NotificationCampaign');
 const { generateDefaultPassword } = require('../utils/passwordUtils');
 const csv = require('csv-parser');
 const fs = require('fs');
 const notificationService = require('../services/notificationService');
 const cacheService = require('../services/cacheService');
+
+const ADMIN_NOTIFICATION_LIMIT = 50;
+const ADMIN_NOTIFICATION_SAMPLE_LIMIT = 12;
+const ADMIN_NOTIFICATION_TYPES = new Set(['warning', 'info', 'error', 'success']);
+const STUDENT_NOTIFICATION_DESTINATIONS = new Set([
+  '/student/notifications',
+  '/student/reservation',
+  '/student/payment',
+  '/student/profile',
+  '/student/hostels',
+]);
+
+const getStudentFullName = (student) =>
+  [student?.firstName, student?.lastName].filter(Boolean).join(' ').trim() || student?.matricNo || 'Student';
+
+const normalizeAdminNotificationType = (value) =>
+  ADMIN_NOTIFICATION_TYPES.has(String(value || '').toLowerCase())
+    ? String(value).toLowerCase()
+    : 'info';
+
+const normalizeAdminNotificationDestination = (value) =>
+  STUDENT_NOTIFICATION_DESTINATIONS.has(value) ? value : '/student/notifications';
+
+const buildAdminNotificationRecord = ({
+  campaignId,
+  adminId,
+  source,
+  title,
+  message,
+  type,
+  icon,
+  destination,
+  studentId,
+}) => ({
+  notificationId: `admin:${campaignId}:${studentId}:${Date.now()}`,
+  source,
+  title,
+  message,
+  type,
+  icon,
+  category: 'announcement',
+  destination,
+  campaignId,
+  createdBy: adminId,
+  createdAt: new Date(),
+});
+
+const resolveAudienceConfig = async (payload = {}) => {
+  const scope = String(payload.scope || 'all').toLowerCase();
+  const query = { isActive: true };
+  const target = {
+    scope,
+    label: 'All active students',
+  };
+
+  if (scope === 'student') {
+    if (!payload.studentId) {
+      throw new Error('Student selection is required for a test notification');
+    }
+
+    const student = await Student.findOne({ _id: payload.studentId, isActive: true }).select(
+      'firstName lastName matricNo email'
+    );
+    if (!student) {
+      throw new Error('Selected student could not be found');
+    }
+
+    return {
+      query: { _id: student._id, isActive: true },
+      target: {
+        scope,
+        student: student._id,
+        label: `${getStudentFullName(student)} (${student.matricNo})`,
+      },
+    };
+  }
+
+  if (scope === 'hostel') {
+    if (!payload.hostelId) {
+      throw new Error('Hostel selection is required');
+    }
+
+    const hostel = await Hostel.findById(payload.hostelId).select('name');
+    if (!hostel) {
+      throw new Error('Selected hostel could not be found');
+    }
+
+    query.assignedHostel = hostel._id;
+    target.hostel = hostel._id;
+    target.label = `Students in ${hostel.name}`;
+  }
+
+  if (scope === 'college') {
+    if (!payload.collegeId) {
+      throw new Error('College selection is required');
+    }
+
+    const college = await College.findById(payload.collegeId).select('name code');
+    if (!college) {
+      throw new Error('Selected college could not be found');
+    }
+
+    query.college = college._id;
+    target.college = college._id;
+    target.label = `Students in ${college.name}`;
+  }
+
+  if (scope === 'department') {
+    if (!payload.departmentId) {
+      throw new Error('Department selection is required');
+    }
+
+    const department = await Department.findById(payload.departmentId).select('name code');
+    if (!department) {
+      throw new Error('Selected department could not be found');
+    }
+
+    query.department = department._id;
+    target.department = department._id;
+    target.label = `Students in ${department.name}`;
+  }
+
+  if (scope === 'level') {
+    const level = parseInt(payload.level, 10);
+    if (![100, 200, 300, 400, 500].includes(level)) {
+      throw new Error('A valid level is required');
+    }
+
+    query.level = level;
+    target.level = level;
+    target.label = `${level} level students`;
+  }
+
+  return { query, target };
+};
+
+const executeAdminNotificationCampaign = async ({
+  adminId,
+  mode,
+  title,
+  message,
+  type,
+  icon,
+  destination,
+  forceEmail = false,
+  audiencePayload,
+}) => {
+  const { query, target } = await resolveAudienceConfig(audiencePayload);
+  const students = await Student.find(query).select(
+    'firstName lastName matricNo email notificationPreferences pushDevices'
+  );
+
+  if (students.length === 0) {
+    throw new Error('No matching students found for this notification');
+  }
+
+  const campaign = await NotificationCampaign.create({
+    createdBy: adminId,
+    mode,
+    title,
+    message,
+    type,
+    icon,
+    destination,
+    forceEmail,
+    target,
+    status: 'completed',
+    stats: {
+      recipients: students.length,
+      inboxSaved: 0,
+      pushAttempted: 0,
+      pushDelivered: 0,
+      emailSent: 0,
+    },
+  });
+
+  const sendResults = await Promise.allSettled(
+    students.map(async (student) => {
+      const inboxNotification = buildAdminNotificationRecord({
+        campaignId: campaign._id,
+        adminId,
+        source: mode === 'test' ? 'admin_test' : 'admin_broadcast',
+        title,
+        message,
+        type,
+        icon,
+        destination,
+        studentId: student._id,
+      });
+
+      await Student.updateOne(
+        { _id: student._id },
+        {
+          $push: {
+            customNotifications: {
+              $each: [inboxNotification],
+              $slice: -ADMIN_NOTIFICATION_LIMIT,
+            },
+          },
+        }
+      );
+
+      const delivery = await notificationService.sendStudentCustomNotification(student, {
+        title,
+        message,
+        type,
+        destination,
+        source: mode === 'test' ? 'admin_test' : 'admin_broadcast',
+        campaignId: campaign._id,
+        forceEmail,
+      });
+
+      return {
+        studentId: student._id,
+        name: getStudentFullName(student),
+        matricNo: student.matricNo,
+        email: student.email,
+        inboxSaved: true,
+        pushAttempted: Boolean(delivery.pushAttempted),
+        pushDelivered: Boolean(delivery.pushDelivered),
+        emailSent: Boolean(delivery.emailSent),
+      };
+    })
+  );
+
+  const successfulResults = sendResults
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value);
+
+  const stats = {
+    recipients: students.length,
+    inboxSaved: successfulResults.filter((result) => result.inboxSaved).length,
+    pushAttempted: successfulResults.filter((result) => result.pushAttempted).length,
+    pushDelivered: successfulResults.filter((result) => result.pushDelivered).length,
+    emailSent: successfulResults.filter((result) => result.emailSent).length,
+  };
+
+  campaign.stats = stats;
+  campaign.recipientSample = successfulResults.slice(0, ADMIN_NOTIFICATION_SAMPLE_LIMIT).map((result) => ({
+    student: result.studentId,
+    name: result.name,
+    matricNo: result.matricNo,
+    email: result.email,
+    inboxSaved: result.inboxSaved,
+    pushAttempted: result.pushAttempted,
+    pushDelivered: result.pushDelivered,
+    emailSent: result.emailSent,
+  }));
+  campaign.status =
+    successfulResults.length === students.length
+      ? 'completed'
+      : successfulResults.length === 0
+      ? 'failed'
+      : 'partial';
+  await campaign.save();
+
+  return {
+    campaign,
+    students,
+    stats,
+  };
+};
 
 // College Management
 exports.createCollege = async (req, res) => {
@@ -1607,6 +1870,189 @@ exports.getPorters = async (req, res) => {
     res.status(200).json({ success: true, data: transformedPorters });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.sendTestNotification = async (req, res) => {
+  try {
+    const title = String(req.body.title || '').trim();
+    const message = String(req.body.message || '').trim();
+
+    if (!title || !message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Title and message are required',
+      });
+    }
+
+    const result = await executeAdminNotificationCampaign({
+      adminId: req.user._id,
+      mode: 'test',
+      title,
+      message,
+      type: normalizeAdminNotificationType(req.body.type),
+      icon: req.body.icon || 'bell-ring-outline',
+      destination: normalizeAdminNotificationDestination(req.body.destination),
+      forceEmail: Boolean(req.body.forceEmail),
+      audiencePayload: {
+        scope: 'student',
+        studentId: req.body.studentId,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Test notification sent successfully',
+      data: {
+        campaignId: result.campaign._id,
+        stats: result.stats,
+        target: result.campaign.target,
+      },
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to send test notification',
+    });
+  }
+};
+
+exports.sendBroadcastNotification = async (req, res) => {
+  try {
+    const title = String(req.body.title || '').trim();
+    const message = String(req.body.message || '').trim();
+
+    if (!title || !message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Title and message are required',
+      });
+    }
+
+    const result = await executeAdminNotificationCampaign({
+      adminId: req.user._id,
+      mode: 'broadcast',
+      title,
+      message,
+      type: normalizeAdminNotificationType(req.body.type),
+      icon: req.body.icon || 'bullhorn',
+      destination: normalizeAdminNotificationDestination(req.body.destination),
+      forceEmail: Boolean(req.body.forceEmail),
+      audiencePayload: {
+        scope: req.body.scope || 'all',
+        hostelId: req.body.hostelId,
+        collegeId: req.body.collegeId,
+        departmentId: req.body.departmentId,
+        level: req.body.level,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Broadcast notification sent successfully',
+      data: {
+        campaignId: result.campaign._id,
+        stats: result.stats,
+        target: result.campaign.target,
+      },
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to send broadcast notification',
+    });
+  }
+};
+
+exports.getNotificationHistory = async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
+    const mode = req.query.mode ? String(req.query.mode).toLowerCase() : null;
+    const query = mode && ['test', 'broadcast'].includes(mode) ? { mode } : {};
+
+    const campaigns = await NotificationCampaign.find(query)
+      .populate('createdBy', 'firstName lastName email')
+      .populate('target.student', 'firstName lastName matricNo email')
+      .populate('target.hostel', 'name code')
+      .populate('target.college', 'name code')
+      .populate('target.department', 'name code')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    const history = campaigns.map((campaign) => ({
+      _id: campaign._id,
+      mode: campaign.mode,
+      title: campaign.title,
+      message: campaign.message,
+      type: campaign.type,
+      icon: campaign.icon,
+      destination: campaign.destination,
+      forceEmail: campaign.forceEmail,
+      status: campaign.status,
+      stats: campaign.stats,
+      target: {
+        scope: campaign.target?.scope || 'all',
+        label:
+          campaign.target?.label ||
+          (campaign.target?.student
+            ? `${getStudentFullName(campaign.target.student)} (${campaign.target.student.matricNo})`
+            : campaign.target?.hostel?.name ||
+              campaign.target?.college?.name ||
+              campaign.target?.department?.name ||
+              (campaign.target?.level ? `${campaign.target.level} level students` : 'All active students')),
+        student: campaign.target?.student
+          ? {
+              _id: campaign.target.student._id,
+              name: getStudentFullName(campaign.target.student),
+              matricNo: campaign.target.student.matricNo,
+              email: campaign.target.student.email,
+            }
+          : null,
+        hostel: campaign.target?.hostel
+          ? {
+              _id: campaign.target.hostel._id,
+              name: campaign.target.hostel.name,
+              code: campaign.target.hostel.code,
+            }
+          : null,
+        college: campaign.target?.college
+          ? {
+              _id: campaign.target.college._id,
+              name: campaign.target.college.name,
+              code: campaign.target.college.code,
+            }
+          : null,
+        department: campaign.target?.department
+          ? {
+              _id: campaign.target.department._id,
+              name: campaign.target.department.name,
+              code: campaign.target.department.code,
+            }
+          : null,
+        level: campaign.target?.level || null,
+      },
+      createdBy: campaign.createdBy
+        ? {
+            _id: campaign.createdBy._id,
+            name: getStudentFullName(campaign.createdBy),
+            email: campaign.createdBy.email,
+          }
+        : null,
+      recipientSample: campaign.recipientSample || [],
+      createdAt: campaign.createdAt,
+      updatedAt: campaign.updatedAt,
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: history,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to load notification history',
+    });
   }
 };
 

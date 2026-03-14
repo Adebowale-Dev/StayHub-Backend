@@ -27,6 +27,8 @@ module.exports = {
   
   // Reservation
   RESERVATION_EXPIRY_HOURS: parseInt(process.env.RESERVATION_EXPIRY_HOURS) || 48,
+  INVITATION_CLEANUP_INTERVAL_MINUTES:
+    parseInt(process.env.INVITATION_CLEANUP_INTERVAL_MINUTES) || 15,
   PAYMENT_CODE_LENGTH: parseInt(process.env.PAYMENT_CODE_LENGTH) || 6,
   
   // Admin

@@ -216,15 +216,19 @@ const validateReservation = [
  * Validation rules for password change
  */
 const validatePasswordChange = [
-  body('oldPassword')
-    .notEmpty()
-    .withMessage('Current password is required'),
+  body().custom((value, { req }) => {
+    if (!req.body.oldPassword && !req.body.currentPassword) {
+      throw new Error('Current password is required');
+    }
+    return true;
+  }),
   body('newPassword')
     .isLength({ min: 8 })
     .withMessage('New password must be at least 8 characters')
     .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
     .withMessage('Password must contain uppercase, lowercase, and number'),
   body('confirmPassword')
+    .optional()
     .custom((value, { req }) => value === req.body.newPassword)
     .withMessage('Passwords do not match'),
   handleValidationErrors,

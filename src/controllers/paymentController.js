@@ -109,7 +109,14 @@ const initializePayment = async (req, res) => {
  */
 const verifyPayment = async (req, res) => {
   try {
-    const { reference } = req.params;
+    const reference = req.params.reference || req.body.reference || req.query.reference;
+
+    if (!reference) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment reference is required',
+      });
+    }
 
     // Verify with Paystack
     const verification = await paystackService.verifyTransaction(reference);
@@ -138,7 +145,16 @@ const verifyPayment = async (req, res) => {
       return res.status(200).json({
         success: true,
         message: 'Payment already verified',
-        data: payment,
+        data: {
+          status: 'paid',
+          paymentStatus: 'paid',
+          amount: payment.amount,
+          paymentCode: payment.paymentCode,
+          paymentReference: payment.paymentReference,
+          reference: payment.paymentReference,
+          paidAt: payment.datePaid,
+          datePaid: payment.datePaid,
+        },
       });
     }
 
@@ -163,9 +179,13 @@ const verifyPayment = async (req, res) => {
         success: true,
         message: 'Payment verified successfully',
         data: {
+          status: 'paid',
+          paymentStatus: 'paid',
           paymentCode: payment.paymentCode,
           amount: payment.amount,
           reference: payment.paymentReference,
+          paymentReference: payment.paymentReference,
+          paidAt: payment.datePaid,
           datePaid: payment.datePaid,
         },
       });
@@ -210,10 +230,23 @@ const getPaymentStatus = async (req, res) => {
     }
 
     res.status(200).json({
+      success: true,
+      status: student.paymentStatus,
       paymentStatus: student.paymentStatus,
-      amount: amount || null,
+      amount: latestPayment ? latestPayment.amount : amount || null,
       reference: latestPayment ? latestPayment.paymentReference : null,
+      paymentReference: latestPayment ? latestPayment.paymentReference : null,
+      paidAt: latestPayment && latestPayment.status === 'completed' ? latestPayment.datePaid : null,
       datePaid: latestPayment && latestPayment.status === 'completed' ? latestPayment.datePaid : null,
+      data: {
+        status: student.paymentStatus,
+        paymentStatus: student.paymentStatus,
+        amount: latestPayment ? latestPayment.amount : amount || null,
+        reference: latestPayment ? latestPayment.paymentReference : null,
+        paymentReference: latestPayment ? latestPayment.paymentReference : null,
+        paidAt: latestPayment && latestPayment.status === 'completed' ? latestPayment.datePaid : null,
+        datePaid: latestPayment && latestPayment.status === 'completed' ? latestPayment.datePaid : null,
+      },
     });
   } catch (error) {
     console.error('Get payment status error:', error);

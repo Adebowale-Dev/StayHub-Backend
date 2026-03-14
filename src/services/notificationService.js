@@ -2,6 +2,12 @@ const emailService = require('./emailService');
 const Student = require('../models/Student');
 const Porter = require('../models/Porter');
 const Admin = require('../models/Admin');
+const {
+  normalizeStudentNotificationPreferences,
+} = require('../constants/studentNotificationPreferences');
+
+const EXPO_PUSH_ENDPOINT = 'https://exp.host/--/api/v2/push/send';
+const EXPO_PUSH_TOKEN_PATTERN = /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/;
 
 /**
  * Notification types
@@ -11,11 +17,208 @@ const NotificationType = {
   RESERVATION_CONFIRMED: 'reservation_confirmed',
   ROOMMATE_RESERVED: 'roommate_reserved',
   ROOM_ASSIGNMENT_UPDATED: 'room_assignment_updated',
+  INVITATION_STATUS_UPDATED: 'invitation_status_updated',
+  ADMIN_ANNOUNCEMENT: 'admin_announcement',
   DAILY_RESERVATION_SUMMARY: 'daily_reservation_summary',
   NEW_STUDENT_CHECKIN: 'new_student_checkin',
   PORTER_APPLICATION_PENDING: 'porter_application_pending',
   PORTER_APPROVED: 'porter_approved',
   RESERVATION_EXPIRED: 'reservation_expired',
+};
+
+const getStudentDisplayName = (studentLike, fallback = 'A student') => {
+  if (!studentLike) return fallback;
+
+  const fullName = [studentLike.firstName, studentLike.lastName].filter(Boolean).join(' ').trim();
+  return fullName || studentLike.matricNo || fallback;
+};
+
+const formatDateTime = (value) => {
+  if (!value) return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+};
+
+const getActivePushDevices = (student) =>
+  (student?.pushDevices || []).filter(
+    (device) => device?.enabled && EXPO_PUSH_TOKEN_PATTERN.test(String(device?.token || ''))
+  );
+
+const canSendPushForPreference = (student, preferenceKey) => {
+  const preferences = normalizeStudentNotificationPreferences(student?.notificationPreferences);
+  return preferences.pushEnabled && preferences[preferenceKey] !== false;
+};
+
+const buildExpoPushMessages = (student, payload) =>
+  getActivePushDevices(student).map((device) => ({
+    to: device.token,
+    sound: payload.sound || 'default',
+    title: payload.title,
+    body: payload.body,
+    data: payload.data || {},
+    channelId: payload.channelId || 'stayhub-alerts',
+    priority: payload.priority || 'high',
+  }));
+
+const sendExpoPushMessages = async (messages) => {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { success: false, deliveredCount: 0, tickets: [] };
+  }
+
+  try {
+    const response = await fetch(EXPO_PUSH_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(messages),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Expo push request failed (${response.status}): ${errorText}`);
+    }
+
+    const payload = await response.json();
+    const tickets = Array.isArray(payload?.data) ? payload.data : [];
+    const deliveredCount = tickets.filter((ticket) => ticket?.status === 'ok').length;
+
+    return {
+      success: deliveredCount > 0,
+      deliveredCount,
+      tickets,
+    };
+  } catch (error) {
+    console.error('Error sending Expo push notification:', error);
+    return {
+      success: false,
+      deliveredCount: 0,
+      tickets: [],
+      error,
+    };
+  }
+};
+
+const deliverStudentNotification = async ({
+  student,
+  preferenceKey,
+  pushPayload,
+  emailHandler,
+  forceEmail = false,
+  emailOnPushFailure = true,
+}) => {
+  const preferences = normalizeStudentNotificationPreferences(student?.notificationPreferences);
+  let pushResult = { success: false, deliveredCount: 0, tickets: [] };
+  const pushAttempted = Boolean(pushPayload && canSendPushForPreference(student, preferenceKey));
+
+  if (pushPayload && canSendPushForPreference(student, preferenceKey)) {
+    pushResult = await sendExpoPushMessages(buildExpoPushMessages(student, pushPayload));
+  }
+
+  const shouldSendEmail =
+    typeof emailHandler === 'function' &&
+    (forceEmail || preferences.emailEscalationEnabled || (emailOnPushFailure && !pushResult.success));
+
+  if (shouldSendEmail) {
+    await emailHandler();
+  }
+
+  return {
+    pushAttempted,
+    pushDelivered: pushResult.success,
+    emailSent: shouldSendEmail,
+    pushResult,
+  };
+};
+
+const buildGenericStudentEmail = ({ title, message, destination, actionLabel = 'Open StayHub' }) => {
+  const actionUrl = destination ? `# ${destination}` : null;
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            background: #f5f7fb;
+            color: #1f2937;
+            margin: 0;
+            padding: 24px 0;
+          }
+          .card {
+            max-width: 620px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 18px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+          }
+          .header {
+            background: linear-gradient(135deg, #1565C0, #0d47a1);
+            color: #ffffff;
+            padding: 28px 32px;
+          }
+          .body {
+            padding: 28px 32px;
+          }
+          .message {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 18px;
+            margin: 20px 0;
+            line-height: 1.6;
+          }
+          .button {
+            display: inline-block;
+            margin-top: 8px;
+            padding: 12px 20px;
+            border-radius: 10px;
+            background: #1565C0;
+            color: #ffffff !important;
+            text-decoration: none;
+            font-weight: 700;
+          }
+          .footer {
+            padding: 20px 32px 28px;
+            color: #64748b;
+            font-size: 13px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="header">
+            <h2 style="margin: 0; font-size: 24px;">${title}</h2>
+          </div>
+          <div class="body">
+            <p>Hello,</p>
+            <div class="message">${message}</div>
+            ${
+              actionUrl
+                ? `<p>This notice is also available in your StayHub notification center.</p>
+                   <a class="button" href="${actionUrl}">${actionLabel}</a>`
+                : ''
+            }
+          </div>
+          <div class="footer">
+            StayHub Hostel Management System
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
 };
 
 /**
@@ -42,7 +245,18 @@ const sendNotification = async (type, data) => {
           data.student,
           data.reservedBy,
           data.room,
-          data.hostel
+          data.hostel,
+          data.expiresAt
+        );
+
+      case NotificationType.INVITATION_STATUS_UPDATED:
+        return await emailService.sendInvitationStatusUpdate(
+          data.inviter,
+          data.invitee,
+          data.room,
+          data.hostel,
+          data.action,
+          data.notes
         );
       
       case NotificationType.PORTER_APPROVED:
@@ -69,9 +283,24 @@ const notifyPaymentSuccess = async (studentId, payment) => {
     const student = await Student.findById(studentId);
     if (!student) throw new Error('Student not found');
 
-    return await sendNotification(NotificationType.PAYMENT_SUCCESSFUL, {
+    return await deliverStudentNotification({
       student,
-      payment,
+      preferenceKey: 'paymentUpdates',
+      pushPayload: {
+        title: 'Payment Confirmed',
+        body: 'Your hostel payment has been verified successfully.',
+        data: {
+          destination: '/student/payment',
+          type: NotificationType.PAYMENT_SUCCESSFUL,
+          reference: payment?.paymentReference || payment?.reference || null,
+        },
+      },
+      emailHandler: () =>
+        sendNotification(NotificationType.PAYMENT_SUCCESSFUL, {
+          student,
+          payment,
+        }),
+      forceEmail: true,
     });
   } catch (error) {
     console.error('Error notifying payment success:', error);
@@ -284,11 +513,28 @@ const notifyReservationConfirmed = async (studentId, roomId, bunkId, hostelId) =
     const bunk = await Bunk.findById(bunkId);
     const hostel = await Hostel.findById(hostelId);
 
-    return await sendNotification(NotificationType.RESERVATION_CONFIRMED, {
+    return await deliverStudentNotification({
       student,
-      room,
-      bunk,
-      hostel,
+      preferenceKey: 'reservationUpdates',
+      pushPayload: {
+        title: 'Reservation Confirmed',
+        body: `Room ${room?.roomNumber || ''}${hostel?.name ? ` in ${hostel.name}` : ''} is now confirmed for you.`.trim(),
+        data: {
+          destination: '/student/reservation',
+          type: NotificationType.RESERVATION_CONFIRMED,
+          roomId: room ? String(room._id) : null,
+          hostelId: hostel ? String(hostel._id) : null,
+          bunkId: bunk ? String(bunk._id) : null,
+        },
+      },
+      emailHandler: () =>
+        sendNotification(NotificationType.RESERVATION_CONFIRMED, {
+          student,
+          room,
+          bunk,
+          hostel,
+        }),
+      forceEmail: true,
     });
   } catch (error) {
     console.error('Error notifying reservation confirmed:', error);
@@ -299,7 +545,7 @@ const notifyReservationConfirmed = async (studentId, roomId, bunkId, hostelId) =
 /**
  * Notify student about being reserved by roommate
  */
-const notifyRoommateReserved = async (studentId, reservedById, roomId, hostelId) => {
+const notifyRoommateReserved = async (studentId, reservedById, roomId, hostelId, expiresAt) => {
   try {
     const student = await Student.findById(studentId);
     const reservedBy = await Student.findById(reservedById);
@@ -309,14 +555,165 @@ const notifyRoommateReserved = async (studentId, reservedById, roomId, hostelId)
     const room = await Room.findById(roomId);
     const hostel = await Hostel.findById(hostelId);
 
-    return await sendNotification(NotificationType.ROOMMATE_RESERVED, {
+    const inviterName = getStudentDisplayName(reservedBy, 'A friend');
+    const location = room?.roomNumber && hostel?.name
+      ? `Room ${room.roomNumber} in ${hostel.name}`
+      : room?.roomNumber
+      ? `Room ${room.roomNumber}`
+      : hostel?.name || 'a room';
+    const deadline = formatDateTime(expiresAt);
+    const body = deadline
+      ? `${inviterName} reserved ${location} for you. Approve it before ${deadline}.`
+      : `${inviterName} reserved ${location} for you. Review it as soon as possible.`;
+
+    return await deliverStudentNotification({
       student,
-      reservedBy,
-      room,
-      hostel,
+      preferenceKey: 'invitationCreated',
+      pushPayload: {
+        title: 'Room Invitation',
+        body,
+        data: {
+          destination: '/student/reservation?focus=invitation',
+          type: NotificationType.ROOMMATE_RESERVED,
+          roomId: room ? String(room._id) : null,
+          hostelId: hostel ? String(hostel._id) : null,
+          inviterId: reservedBy ? String(reservedBy._id) : null,
+          expiresAt,
+        },
+      },
+      emailHandler: () =>
+        sendNotification(NotificationType.ROOMMATE_RESERVED, {
+          student,
+          reservedBy,
+          room,
+          hostel,
+          expiresAt,
+        }),
     });
   } catch (error) {
     console.error('Error notifying roommate reserved:', error);
+    throw error;
+  }
+};
+
+/**
+ * Notify inviter about invitation status update
+ */
+const notifyInvitationStatusUpdated = async (inviterId, inviteeId, roomId, hostelId, action, notes) => {
+  try {
+    const inviter = await Student.findById(inviterId);
+    const invitee = await Student.findById(inviteeId);
+    const Room = require('../models/Room');
+    const Hostel = require('../models/Hostel');
+
+    const room = roomId ? await Room.findById(roomId) : null;
+    const hostel = hostelId ? await Hostel.findById(hostelId) : null;
+
+    if (!inviter || !invitee) {
+      return null;
+    }
+
+    const inviteeName = getStudentDisplayName(invitee, 'Your friend');
+    const location = room?.roomNumber && hostel?.name
+      ? `Room ${room.roomNumber} in ${hostel.name}`
+      : room?.roomNumber
+      ? `Room ${room.roomNumber}`
+      : hostel?.name || 'the reserved room';
+
+    const bodyByAction = {
+      approved: `${inviteeName} approved the invitation for ${location}.`,
+      rejected: `${inviteeName} rejected the invitation for ${location}.`,
+      expired: `${inviteeName}'s invitation for ${location} expired and the bed was released.`,
+    };
+
+    const titleByAction = {
+      approved: 'Invitation Approved',
+      rejected: 'Invitation Declined',
+      expired: 'Invitation Expired',
+    };
+
+    const preferenceKey = action === 'expired' ? 'invitationExpired' : 'invitationUpdates';
+
+    return await deliverStudentNotification({
+      student: inviter,
+      preferenceKey,
+      pushPayload: {
+        title: titleByAction[action] || 'Invitation Update',
+        body: bodyByAction[action] || notes || 'Your invitation has been updated.',
+        data: {
+          destination: '/student/reservation?focus=history',
+          type: NotificationType.INVITATION_STATUS_UPDATED,
+          action,
+          inviteeId: String(invitee._id),
+          roomId: room ? String(room._id) : null,
+          hostelId: hostel ? String(hostel._id) : null,
+          notes: notes || null,
+        },
+      },
+      emailHandler: () =>
+        sendNotification(NotificationType.INVITATION_STATUS_UPDATED, {
+          inviter,
+          invitee,
+          room,
+          hostel,
+          action,
+          notes,
+        }),
+      forceEmail: action === 'expired',
+    });
+  } catch (error) {
+    console.error('Error notifying invitation status update:', error);
+    throw error;
+  }
+};
+
+const sendStudentCustomNotification = async (studentOrId, payload = {}) => {
+  try {
+    const student =
+      typeof studentOrId === 'string' ? await Student.findById(studentOrId) : studentOrId;
+
+    if (!student) {
+      throw new Error('Student not found');
+    }
+
+    const title = String(payload.title || 'StayHub Update').trim();
+    const message = String(payload.message || '').trim();
+    const destination = payload.destination || '/student/notifications';
+
+    if (!message) {
+      throw new Error('Notification message is required');
+    }
+
+    return await deliverStudentNotification({
+      student,
+      preferenceKey: payload.preferenceKey || 'adminAnnouncements',
+      pushPayload: {
+        title,
+        body: message,
+        data: {
+          destination,
+          type: payload.type || NotificationType.ADMIN_ANNOUNCEMENT,
+          source: payload.source || 'admin',
+          campaignId: payload.campaignId ? String(payload.campaignId) : null,
+        },
+      },
+      emailHandler: () =>
+        emailService.sendEmail({
+          to: student.email,
+          subject: payload.emailSubject || `${title} - StayHub`,
+          html: buildGenericStudentEmail({
+            title,
+            message,
+            destination,
+            actionLabel: payload.actionLabel || 'Open Notification Center',
+          }),
+          text: message,
+        }),
+      forceEmail: Boolean(payload.forceEmail),
+      emailOnPushFailure: payload.emailOnPushFailure !== false,
+    });
+  } catch (error) {
+    console.error('Error sending custom student notification:', error);
     throw error;
   }
 };
@@ -398,11 +795,14 @@ const notifyAdminNewPorterApplication = async (porterEmail) => {
 
 module.exports = {
   NotificationType,
+  normalizeStudentNotificationPreferences,
   sendNotification,
+  sendStudentCustomNotification,
   notifyPaymentSuccess,
   sendPaymentCode,
   notifyReservationConfirmed,
   notifyRoommateReserved,
+  notifyInvitationStatusUpdated,
   notifyPorterApproved,
   sendDailySummaryToPorters,
   notifyAdminNewPorterApplication,

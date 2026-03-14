@@ -8,6 +8,7 @@ const swaggerUi = require('swagger-ui-express');
 const connectDB = require('./config/db');
 const config = require('./config/env');
 const swaggerSpec = require('./config/swagger');
+const { startReservationCleanupJob } = require('./services/reservationCleanupService');
 
 // Import routes
 const authRoutes = require('./routes/authRoutes');
@@ -136,6 +137,7 @@ const server = app.listen(PORT, () => {
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
+  startReservationCleanupJob();
 });
 
 // Handle unhandled promise rejections

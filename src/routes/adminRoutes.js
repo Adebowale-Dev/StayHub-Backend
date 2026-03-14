@@ -158,6 +158,9 @@ router.get('/search', adminController.search);
                    type: object
  */
 router.get('/dashboard', adminController.getDashboardStats);
+router.get('/notifications/history', adminController.getNotificationHistory);
+router.post('/notifications/test', adminController.sendTestNotification);
+router.post('/notifications/broadcast', adminController.sendBroadcastNotification);
 
 /**
  * @swagger

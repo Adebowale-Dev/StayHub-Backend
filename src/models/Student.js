@@ -1,5 +1,8 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const {
+  DEFAULT_STUDENT_NOTIFICATION_PREFERENCES,
+} = require('../constants/studentNotificationPreferences');
 
 const studentSchema = new mongoose.Schema({
   firstName: {
@@ -48,6 +51,11 @@ const studentSchema = new mongoose.Schema({
   profilePicture: {
     type: String,
     default: null,
+  },
+  theme: {
+    type: String,
+    enum: ['light', 'dark'],
+    default: 'light',
   },
   level: {
     type: Number,
@@ -117,6 +125,192 @@ const studentSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Student',
   },
+  invitationHistory: [{
+    action: {
+      type: String,
+      enum: ['invited', 'approved', 'rejected', 'expired'],
+      required: true,
+    },
+    role: {
+      type: String,
+      enum: ['inviter', 'invitee'],
+      required: true,
+    },
+    actor: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Student',
+    },
+    relatedStudent: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Student',
+    },
+    hostel: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Hostel',
+    },
+    hostelName: {
+      type: String,
+      trim: true,
+    },
+    room: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Room',
+    },
+    roomNumber: {
+      type: String,
+      trim: true,
+    },
+    bunk: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Bunk',
+    },
+    bunkNumber: {
+      type: String,
+      trim: true,
+    },
+    notes: {
+      type: String,
+      trim: true,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  }],
+  notificationReads: [{
+    notificationId: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    readAt: {
+      type: Date,
+      default: Date.now,
+    },
+  }],
+  notificationPreferences: {
+    pushEnabled: {
+      type: Boolean,
+      default: DEFAULT_STUDENT_NOTIFICATION_PREFERENCES.pushEnabled,
+    },
+    emailEscalationEnabled: {
+      type: Boolean,
+      default: DEFAULT_STUDENT_NOTIFICATION_PREFERENCES.emailEscalationEnabled,
+    },
+    adminAnnouncements: {
+      type: Boolean,
+      default: DEFAULT_STUDENT_NOTIFICATION_PREFERENCES.adminAnnouncements,
+    },
+    invitationCreated: {
+      type: Boolean,
+      default: DEFAULT_STUDENT_NOTIFICATION_PREFERENCES.invitationCreated,
+    },
+    invitationUpdates: {
+      type: Boolean,
+      default: DEFAULT_STUDENT_NOTIFICATION_PREFERENCES.invitationUpdates,
+    },
+    invitationExpired: {
+      type: Boolean,
+      default: DEFAULT_STUDENT_NOTIFICATION_PREFERENCES.invitationExpired,
+    },
+    paymentUpdates: {
+      type: Boolean,
+      default: DEFAULT_STUDENT_NOTIFICATION_PREFERENCES.paymentUpdates,
+    },
+    reservationUpdates: {
+      type: Boolean,
+      default: DEFAULT_STUDENT_NOTIFICATION_PREFERENCES.reservationUpdates,
+    },
+  },
+  customNotifications: [{
+    notificationId: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    source: {
+      type: String,
+      enum: ['admin_test', 'admin_broadcast'],
+      default: 'admin_broadcast',
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    message: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    type: {
+      type: String,
+      enum: ['warning', 'info', 'error', 'success'],
+      default: 'info',
+    },
+    icon: {
+      type: String,
+      trim: true,
+    },
+    category: {
+      type: String,
+      default: 'announcement',
+      trim: true,
+    },
+    destination: {
+      type: String,
+      default: '/student/notifications',
+      trim: true,
+    },
+    campaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'NotificationCampaign',
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin',
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  }],
+  pushDevices: [{
+    token: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    platform: {
+      type: String,
+      enum: ['android', 'ios', 'web', 'unknown'],
+      default: 'unknown',
+    },
+    deviceName: {
+      type: String,
+      trim: true,
+    },
+    appOwnership: {
+      type: String,
+      trim: true,
+    },
+    projectId: {
+      type: String,
+      trim: true,
+    },
+    enabled: {
+      type: Boolean,
+      default: true,
+    },
+    lastRegisteredAt: {
+      type: Date,
+      default: Date.now,
+    },
+    lastSeenAt: {
+      type: Date,
+      default: Date.now,
+    },
+  }],
   firstLogin: {
     type: Boolean,
     default: true,

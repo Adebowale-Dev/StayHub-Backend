@@ -5,6 +5,7 @@ const Bunk = require('../models/Bunk');
 const { generateDefaultPassword } = require('../utils/passwordUtils');
 const emailService = require('../services/emailService');
 const notificationService = require('../services/notificationService');
+const { releaseExpiredReservations } = require('../services/reservationCleanupService');
 
 /**
  * @desc    Submit porter application
@@ -73,7 +74,7 @@ exports.getDashboard = async (req, res) => {
     // Get students in assigned hostel
     const students = await Student.find({
       assignedHostel: porter.assignedHostel,
-      reservationStatus: { $in: ['confirmed', 'checked_in'] },
+      reservationStatus: { $in: ['temporary', 'confirmed', 'checked_in'] },
     }).populate('assignedRoom assignedBunk');
 
     const totalStudents = students.length;
@@ -292,34 +293,13 @@ exports.releaseExpiredReservations = async (req, res) => {
       });
     }
 
-    // Find expired reservations
-    const expiredStudents = await Student.find({
-      assignedHostel: porter.assignedHostel,
-      reservationStatus: 'confirmed',
-      reservationExpiresAt: { $lt: new Date() },
+    const releasedCount = await releaseExpiredReservations({
+      hostelId: porter.assignedHostel,
     });
-
-    for (const student of expiredStudents) {
-      // Release bunk
-      await Bunk.findByIdAndUpdate(student.assignedBunk, {
-        status: 'available',
-        occupiedByStudent: null,
-        reservedUntil: null,
-      });
-
-      // Update room occupancy
-      const room = await Room.findById(student.assignedRoom);
-      room.currentOccupants = Math.max(0, room.currentOccupants - 1);
-      await room.updateStatus();
-
-      // Update student
-      student.reservationStatus = 'expired';
-      await student.save();
-    }
 
     res.status(200).json({
       success: true,
-      message: `${expiredStudents.length} expired reservations released`,
+      message: `${releasedCount} expired reservations released`,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

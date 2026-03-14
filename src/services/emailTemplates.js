@@ -135,7 +135,7 @@ const reservationConfirmation = (student, room, bunk, hostel) => {
       <p><strong>Roommates:</strong> You have reserved this room with ${student.roommates.length} other student(s).</p>
     ` : ''}
     
-    <a href="${config.FRONTEND_URL}/student/reservations" class="button">View Reservation</a>
+    <a href="${config.FRONTEND_URL}/student/reservation?focus=history&source=email" class="button">View Reservation</a>
     
     <p>Best regards,<br>StayHub Team</p>
   `;
@@ -146,29 +146,64 @@ const reservationConfirmation = (student, room, bunk, hostel) => {
 /**
  * Roommate notification email
  */
-const roommateNotification = (student, reservedBy, room, hostel) => {
+const roommateNotification = (student, reservedBy, room, hostel, expiresAt) => {
+  const approvalDeadline = expiresAt
+    ? formatDateTime(expiresAt)
+    : `${config.RESERVATION_EXPIRY_HOURS} hours`;
   const content = `
     <h2>Room Reserved for You! 👥</h2>
     <p>Dear ${student.firstName} ${student.lastName},</p>
-    <p><strong>${reservedBy.firstName} ${reservedBy.lastName}</strong> has reserved a room for you as a roommate.</p>
+    <p><strong>${reservedBy.firstName} ${reservedBy.lastName}</strong> has reserved a room space for you.</p>
     
     <div class="info-box">
       <p><strong>Hostel:</strong> ${hostel.name}</p>
       <p><strong>Room Number:</strong> ${room.roomNumber}</p>
       <p><strong>Level:</strong> ${hostel.level} Level</p>
       <p><strong>Reserved By:</strong> ${reservedBy.firstName} ${reservedBy.lastName} (${reservedBy.matricNo})</p>
+      <p><strong>Approve Before:</strong> ${approvalDeadline}</p>
     </div>
     
     <p><strong>Action Required:</strong></p>
-    <p>You need to complete your payment and confirm this reservation. If you do not confirm within the specified time, the reservation will expire and you can choose another room.</p>
+    <p>Complete your payment if needed, then approve this room from your StayHub reservation page before the deadline above.</p>
     
-    <a href="${config.FRONTEND_URL}/student/dashboard" class="button">View Details & Confirm</a>
+    <a href="${config.FRONTEND_URL}/student/reservation?focus=invitation&source=email" class="button">Review & Approve Room</a>
     
-    <p>Alternatively, you can choose a different available room if you prefer.</p>
+    <p>If you reject the invitation or do nothing before the deadline, the room hold will be released automatically.</p>
     
     <p>Best regards,<br>StayHub Team</p>
   `;
   
+  return baseTemplate(content);
+};
+
+/**
+ * Invitation status update email
+ */
+const invitationStatusUpdate = (inviter, invitee, room, hostel, action, notes) => {
+  const actionLabels = {
+    approved: 'approved',
+    rejected: 'rejected',
+    expired: 'expired',
+  };
+
+  const actionLabel = actionLabels[action] || action;
+  const content = `
+    <h2>Invitation Update</h2>
+    <p>Dear ${inviter.firstName} ${inviter.lastName},</p>
+    <p><strong>${invitee.firstName} ${invitee.lastName}</strong> has ${actionLabel} the room invitation you created.</p>
+
+    <div class="info-box">
+      <p><strong>Invitee:</strong> ${invitee.firstName} ${invitee.lastName} (${invitee.matricNo})</p>
+      <p><strong>Hostel:</strong> ${hostel?.name || 'Assigned hostel'}</p>
+      <p><strong>Room Number:</strong> ${room?.roomNumber || 'Assigned room'}</p>
+      ${notes ? `<p><strong>Note:</strong> ${notes}</p>` : ''}
+    </div>
+
+    <a href="${config.FRONTEND_URL}/student/reservation?focus=history&source=email" class="button">View Invitation History</a>
+
+    <p>Best regards,<br>StayHub Team</p>
+  `;
+
   return baseTemplate(content);
 };
 
@@ -301,6 +336,7 @@ module.exports = {
   paymentConfirmation,
   reservationConfirmation,
   roommateNotification,
+  invitationStatusUpdate,
   passwordReset,
   porterWelcome,
   dailyReservationsSummary,

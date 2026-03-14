@@ -1,8 +1,10 @@
 const Admin = require('../models/Admin');
 const Student = require('../models/Student');
 const Porter = require('../models/Porter');
+const jwt = require('jsonwebtoken');
 const { generateToken } = require('../middlewares/authMiddleware');
 const { generateDefaultPassword } = require('../utils/passwordUtils');
+const config = require('../config/env');
 const emailService = require('../services/emailService');
 
 /**
@@ -136,7 +138,8 @@ const login = async (req, res) => {
  */
 const changePassword = async (req, res) => {
   try {
-    const { oldPassword, newPassword } = req.body;
+    const oldPassword = req.body.oldPassword || req.body.currentPassword;
+    const { newPassword } = req.body;
     const userId = req.user._id;
     const userRole = req.userRole;
 
@@ -249,6 +252,7 @@ const getProfile = async (req, res) => {
     if (userRole === 'student') {
       // Add matricNumber as an alias for matricNo
       userObject.matricNumber = userObject.matricNo;
+      userObject.phone = userObject.phoneNumber;
       
       // Ensure college, department, level, and gender are available at root level
       // These should already be populated, but let's ensure they're accessible
@@ -335,12 +339,19 @@ const updateProfile = async (req, res) => {
       if (updateData.firstName !== undefined) studentUpdate.firstName = updateData.firstName;
       if (updateData.lastName !== undefined) studentUpdate.lastName = updateData.lastName;
       if (updateData.phoneNumber !== undefined) studentUpdate.phoneNumber = updateData.phoneNumber;
+      if (updateData.phone !== undefined) studentUpdate.phoneNumber = updateData.phone;
       if (updateData.address !== undefined) studentUpdate.address = updateData.address;
       if (updateData.dateOfBirth !== undefined) studentUpdate.dateOfBirth = updateData.dateOfBirth;
       if (updateData.emergencyContact !== undefined) studentUpdate.emergencyContact = updateData.emergencyContact;
       if (updateData.gender !== undefined) studentUpdate.gender = updateData.gender;
       if (updateData.matricNumber !== undefined) studentUpdate.matricNo = updateData.matricNumber;
       if (updateData.level !== undefined) studentUpdate.level = updateData.level;
+      if (updateData.theme !== undefined && ['light', 'dark'].includes(updateData.theme)) {
+        studentUpdate.theme = updateData.theme;
+      }
+      if (Object.prototype.hasOwnProperty.call(updateData, 'profilePicture')) {
+        studentUpdate.profilePicture = updateData.profilePicture || null;
+      }
       
       // Allow email update (optional - you can remove this if email should not be changeable)
       if (updateData.email !== undefined && updateData.email !== req.user.email) {
@@ -392,6 +403,11 @@ const updateProfile = async (req, res) => {
       userObject.name = userObject.firstName;
     } else if (userObject.lastName) {
       userObject.name = userObject.lastName;
+    }
+
+    if (userRole === 'student') {
+      userObject.matricNumber = userObject.matricNo;
+      userObject.phone = userObject.phoneNumber;
     }
 
     res.status(200).json({
@@ -461,14 +477,16 @@ const forgotPassword = async (req, res) => {
       });
     }
 
-    // Generate reset token
-    const { generateResetToken } = require('../utils/generateCode');
-    const resetToken = generateResetToken();
+    const resetToken = jwt.sign(
+      {
+        id: user._id.toString(),
+        role,
+        purpose: 'password-reset',
+      },
+      config.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
 
-    // Save reset token (in production, store this in database with expiry)
-    // For now, we'll send it directly
-    
-    // Send email
     await emailService.sendPasswordResetEmail(email, resetToken);
 
     res.status(200).json({
@@ -484,6 +502,84 @@ const forgotPassword = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Reset password from emailed token
+ * @route   POST /api/auth/reset-password
+ * @access  Public
+ */
+const resetPassword = async (req, res) => {
+  try {
+    const { token } = req.body;
+    const newPassword = req.body.newPassword || req.body.password;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reset token and new password are required',
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, config.JWT_SECRET);
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reset link is invalid or has expired',
+      });
+    }
+
+    if (decoded.purpose !== 'password-reset') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid reset token',
+      });
+    }
+
+    let user;
+    switch (decoded.role) {
+      case 'admin':
+        user = await Admin.findById(decoded.id);
+        break;
+      case 'porter':
+        user = await Porter.findById(decoded.id);
+        break;
+      case 'student':
+        user = await Student.findById(decoded.id);
+        break;
+      default:
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid reset token',
+        });
+    }
+
+    if (!user || !user.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reset link is no longer valid',
+      });
+    }
+
+    user.password = newPassword;
+    if ('firstLogin' in user) {
+      user.firstLogin = false;
+    }
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset successfully',
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while resetting password',
+    });
+  }
+};
+
 module.exports = {
   login,
   changePassword,
@@ -491,4 +587,5 @@ module.exports = {
   updateProfile,
   logout,
   forgotPassword,
+  resetPassword,
 };
