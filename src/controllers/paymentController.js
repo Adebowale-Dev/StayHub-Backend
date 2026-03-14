@@ -69,8 +69,14 @@ const initializePayment = async (req, res) => {
             console.error('Failed to send payment code email:', emailError.message);
         }
         res.status(200).json({
-            authorizationUrl: paystackData.data.authorization_url,
-            reference: paystackData.data.reference,
+            success: true,
+            data: {
+                authorizationUrl: paystackData.data.authorization_url,
+                authorization_url: paystackData.data.authorization_url,
+                reference: paystackData.data.reference,
+                paymentCode: payment.paymentCode,
+                amount: paymentAmount,
+            },
         });
     }
     catch (error) {
@@ -280,7 +286,11 @@ const getPaymentAmount = async (req, res) => {
             amount = config.amount;
             cacheService.set(cacheService.cacheKeys.paymentAmount(), amount);
         }
-        res.status(200).json({ amount });
+        res.status(200).json({
+            success: true,
+            data: { amount },
+            amount,
+        });
     }
     catch (error) {
         console.error('Get payment amount error:', error);
@@ -516,10 +526,13 @@ const verifyPaymentCode = async (req, res) => {
                 success: true,
                 message: 'Payment already verified',
                 data: {
-                    status: 'completed',
+                    status: 'paid',
+                    paymentStatus: 'paid',
                     amount: payment.amount,
                     paymentCode: payment.paymentCode,
                     paymentReference: payment.paymentReference,
+                    reference: payment.paymentReference,
+                    paidAt: payment.datePaid,
                     datePaid: payment.datePaid
                 }
             });
@@ -573,10 +586,13 @@ const verifyPaymentCode = async (req, res) => {
                         success: true,
                         message: 'Payment verified successfully',
                         data: {
-                            status: 'completed',
+                            status: 'paid',
+                            paymentStatus: 'paid',
                             amount: payment.amount,
                             paymentCode: payment.paymentCode,
                             paymentReference: payment.paymentReference,
+                            reference: payment.paymentReference,
+                            paidAt: payment.datePaid,
                             datePaid: payment.datePaid
                         }
                     });

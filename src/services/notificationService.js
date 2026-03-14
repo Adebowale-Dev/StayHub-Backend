@@ -2,6 +2,7 @@ const emailService = require('./emailService');
 const Student = require('../models/Student');
 const Porter = require('../models/Porter');
 const Admin = require('../models/Admin');
+const config = require('../config/env');
 const { normalizeStudentNotificationPreferences, } = require('../constants/studentNotificationPreferences');
 const EXPO_PUSH_ENDPOINT = 'https://exp.host/--/api/v2/push/send';
 const EXPO_PUSH_TOKEN_PATTERN = /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/;
@@ -9,6 +10,7 @@ const NotificationType = {
     PAYMENT_SUCCESSFUL: 'payment_successful',
     RESERVATION_CONFIRMED: 'reservation_confirmed',
     ROOMMATE_RESERVED: 'roommate_reserved',
+    INVITATION_REMINDER: 'invitation_reminder',
     ROOM_ASSIGNMENT_UPDATED: 'room_assignment_updated',
     INVITATION_STATUS_UPDATED: 'invitation_status_updated',
     ADMIN_ANNOUNCEMENT: 'admin_announcement',
@@ -108,7 +110,11 @@ const deliverStudentNotification = async ({ student, preferenceKey, pushPayload,
     };
 };
 const buildGenericStudentEmail = ({ title, message, destination, actionLabel = 'Open StayHub' }) => {
-    const actionUrl = destination ? `# ${destination}` : null;
+    const actionUrl = destination
+        ? /^https?:\/\//i.test(destination)
+            ? destination
+            : `${config.FRONTEND_URL}${String(destination).startsWith('/') ? '' : '/'}${destination}`
+        : null;
     return `
     <!DOCTYPE html>
     <html>
@@ -498,10 +504,67 @@ const notifyRoommateReserved = async (studentId, reservedById, roomId, hostelId,
                 hostel,
                 expiresAt,
             }),
+            forceEmail: true,
         });
     }
     catch (error) {
         console.error('Error notifying roommate reserved:', error);
+        throw error;
+    }
+};
+const notifyInvitationReminder = async (studentId, reservedById, roomId, hostelId, expiresAt, reminderHours) => {
+    try {
+        const student = await Student.findById(studentId);
+        const reservedBy = await Student.findById(reservedById);
+        const Room = require('../models/Room');
+        const Hostel = require('../models/Hostel');
+        const room = await Room.findById(roomId);
+        const hostel = await Hostel.findById(hostelId);
+        if (!student) {
+            return null;
+        }
+        const inviterName = getStudentDisplayName(reservedBy, 'A friend');
+        const location = room?.roomNumber && hostel?.name
+            ? `Room ${room.roomNumber} in ${hostel.name}`
+            : room?.roomNumber
+                ? `Room ${room.roomNumber}`
+                : hostel?.name || 'your reserved room';
+        const deadline = formatDateTime(expiresAt);
+        const body = deadline
+            ? `${inviterName}'s reserved space in ${location} is still waiting for you. Approve it before ${deadline}.`
+            : `${inviterName}'s reserved space in ${location} is still waiting for you.`;
+        return await deliverStudentNotification({
+            student,
+            preferenceKey: 'invitationUpdates',
+            pushPayload: {
+                title: reminderHours <= 2 ? 'Invitation Expiring Soon' : 'Invitation Reminder',
+                body,
+                data: {
+                    destination: '/student/reservation?focus=invitation',
+                    type: NotificationType.INVITATION_REMINDER,
+                    roomId: room ? String(room._id) : null,
+                    hostelId: hostel ? String(hostel._id) : null,
+                    inviterId: reservedBy ? String(reservedBy._id) : null,
+                    expiresAt,
+                    reminderHours,
+                },
+            },
+            emailHandler: () => emailService.sendEmail({
+                to: student.email,
+                subject: `${reminderHours <= 2 ? 'Urgent' : 'Reminder'}: Room invitation awaiting your approval`,
+                html: buildGenericStudentEmail({
+                    title: reminderHours <= 2 ? 'Room Invitation Expiring Soon' : 'Room Invitation Reminder',
+                    message: `${body} Complete payment if needed, then approve the room in StayHub.`,
+                    destination: `${config.FRONTEND_URL}/student/reservation?focus=invitation&source=email`,
+                    actionLabel: 'Review Invitation',
+                }),
+                text: `${body} Complete payment if needed, then approve the room in StayHub.`,
+            }),
+            forceEmail: reminderHours <= 2,
+        });
+    }
+    catch (error) {
+        console.error('Error notifying invitation reminder:', error);
         throw error;
     }
 };
@@ -679,6 +742,7 @@ module.exports = {
     sendPaymentCode,
     notifyReservationConfirmed,
     notifyRoommateReserved,
+    notifyInvitationReminder,
     notifyInvitationStatusUpdated,
     notifyPorterApproved,
     sendDailySummaryToPorters,

@@ -29,6 +29,7 @@ router.post('/reserve', validateReservation, studentController.reserveRoom);
 router.post('/reservations', studentController.createReservation);
 router.delete('/reservations/:reservationId', studentController.cancelReservation);
 router.get('/reservation', studentController.getReservation);
+router.post('/reservation/invite-preview', studentController.previewReservationInvite);
 router.post('/reservation/respond', studentController.respondToReservationInvite);
 router.post('/reservation/members', studentController.addGroupMembers);
 router.patch('/reservations/:reservationId/members', studentController.addGroupMembers);

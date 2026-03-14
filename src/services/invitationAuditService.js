@@ -69,7 +69,7 @@ const logInvitationOutcome = async ({ invitee, inviter, actor, action, room, hos
     const inviteeId = getEntityId(invitee);
     const inviterId = getEntityId(inviter);
     const actorId = getEntityId(actor);
-    if (!inviteeId || !inviterId || !['approved', 'rejected', 'expired'].includes(action)) {
+    if (!inviteeId || !inviterId || !['viewed', 'approved', 'rejected', 'expired'].includes(action)) {
         return;
     }
     const createdAt = new Date();

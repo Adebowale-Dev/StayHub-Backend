@@ -2,6 +2,10 @@ require('dotenv').config();
 module.exports = {
     PORT: process.env.PORT || 5000,
     NODE_ENV: process.env.NODE_ENV || 'development',
+    API_RATE_LIMIT_WINDOW_MS: parseInt(process.env.API_RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000,
+    API_RATE_LIMIT_MAX: parseInt(process.env.API_RATE_LIMIT_MAX, 10) || 300,
+    AUTH_RATE_LIMIT_WINDOW_MS: parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000,
+    AUTH_RATE_LIMIT_MAX: parseInt(process.env.AUTH_RATE_LIMIT_MAX, 10) || 20,
     MONGODB_URI: process.env.MONGODB_URI,
     JWT_SECRET: process.env.JWT_SECRET,
     JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '7d',
@@ -14,6 +18,7 @@ module.exports = {
     FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
     RESERVATION_EXPIRY_HOURS: parseInt(process.env.RESERVATION_EXPIRY_HOURS) || 48,
     INVITATION_CLEANUP_INTERVAL_MINUTES: parseInt(process.env.INVITATION_CLEANUP_INTERVAL_MINUTES) || 15,
+    INVITATION_REMINDER_HOURS: process.env.INVITATION_REMINDER_HOURS || '12,2',
     PAYMENT_CODE_LENGTH: parseInt(process.env.PAYMENT_CODE_LENGTH) || 6,
     ADMIN_EMAIL: process.env.ADMIN_EMAIL,
     ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,

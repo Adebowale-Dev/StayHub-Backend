@@ -45,12 +45,33 @@ app.get('/api-docs.json', (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.send(swaggerSpec);
 });
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    message: 'Too many requests from this IP, please try again later.',
+const shouldSkipRateLimit = config.NODE_ENV === 'development';
+const apiLimiter = rateLimit({
+    windowMs: config.API_RATE_LIMIT_WINDOW_MS,
+    max: config.API_RATE_LIMIT_MAX,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => shouldSkipRateLimit,
+    message: {
+        success: false,
+        message: 'Too many requests from this IP, please try again later.',
+    },
 });
-app.use('/api/', limiter);
+const authLimiter = rateLimit({
+    windowMs: config.AUTH_RATE_LIMIT_WINDOW_MS,
+    max: config.AUTH_RATE_LIMIT_MAX,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => shouldSkipRateLimit,
+    message: {
+        success: false,
+        message: 'Too many authentication attempts, please try again later.',
+    },
+});
+app.use('/api/', apiLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/forgot-password', authLimiter);
+app.use('/api/auth/reset-password', authLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/student', studentRoutes);

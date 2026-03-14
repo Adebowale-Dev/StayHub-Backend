@@ -39,6 +39,253 @@ const normalizeStudentForClient = (student) => {
         reservationStatus: student.reservationStatus,
     };
 };
+const normalizeDepartmentForClient = (department) => {
+    if (!department)
+        return null;
+    if (typeof department === 'object') {
+        return {
+            _id: department._id,
+            name: department.name,
+            code: department.code,
+        };
+    }
+    return department;
+};
+const maskEmailAddress = (email) => {
+    if (!email || typeof email !== 'string' || !email.includes('@'))
+        return null;
+    const [localPart, domain] = email.split('@');
+    if (!localPart || !domain)
+        return null;
+    const visibleLocal = localPart.length <= 2
+        ? `${localPart[0] || ''}*`
+        : `${localPart.slice(0, 2)}${'*'.repeat(Math.max(localPart.length - 2, 1))}`;
+    return `${visibleLocal}@${domain}`;
+};
+const buildInvitationDeliveryChannels = (student) => {
+    const preferences = notificationService.normalizeStudentNotificationPreferences(student?.notificationPreferences);
+    const pushDeviceCount = (student?.pushDevices || [])
+        .filter((device) => device?.enabled && EXPO_PUSH_TOKEN_PATTERN.test(String(device?.token || '')))
+        .length;
+    return {
+        email: {
+            available: Boolean(student?.email),
+            addressMasked: maskEmailAddress(student?.email),
+            willSend: Boolean(student?.email),
+        },
+        inApp: {
+            available: true,
+            willSend: true,
+        },
+        push: {
+            available: pushDeviceCount > 0,
+            deviceCount: pushDeviceCount,
+            willSend: pushDeviceCount > 0 && preferences.pushEnabled && preferences.invitationCreated !== false,
+        },
+    };
+};
+const validateInvitationCandidate = ({ inviter, invitee, hostel }) => {
+    if (!invitee) {
+        return {
+            valid: false,
+            status: 404,
+            code: 'student_not_found',
+            message: 'Student not found',
+        };
+    }
+    if (String(invitee._id) === String(inviter?._id) || invitee.matricNo === inviter?.matricNo) {
+        return {
+            valid: false,
+            status: 400,
+            code: 'self_invite',
+            message: 'You cannot add your own matric number as a friend invitation',
+        };
+    }
+    if (!invitee.isActive) {
+        return {
+            valid: false,
+            status: 400,
+            code: 'inactive_student',
+            message: `${invitee.firstName} ${invitee.lastName} is not active in StayHub`,
+        };
+    }
+    if (ACTIVE_RESERVATION_STATUSES.includes(invitee.reservationStatus)) {
+        return {
+            valid: false,
+            status: 400,
+            code: 'existing_reservation',
+            message: `${invitee.firstName} ${invitee.lastName} already has a reservation or pending invitation`,
+        };
+    }
+    if (hostel?.gender && hostel.gender !== 'mixed' && invitee.gender && invitee.gender !== hostel.gender) {
+        return {
+            valid: false,
+            status: 400,
+            code: 'gender_mismatch',
+            message: `${invitee.firstName} ${invitee.lastName} is not eligible for ${hostel.name} because of hostel gender restrictions`,
+        };
+    }
+    if (hostel?.level != null && invitee.level != null && Number(invitee.level) !== Number(hostel.level)) {
+        return {
+            valid: false,
+            status: 400,
+            code: 'level_mismatch',
+            message: `${invitee.firstName} ${invitee.lastName} is not eligible for ${hostel.name} because it is assigned to level ${hostel.level}`,
+        };
+    }
+    return {
+        valid: true,
+        status: 200,
+        code: 'ready',
+        message: 'Invitation can be sent',
+    };
+};
+const buildInvitationPreviewPayload = ({ invitee, room, hostel, validation }) => ({
+    friend: {
+        ...normalizeStudentForClient(invitee),
+        department: normalizeDepartmentForClient(invitee?.department),
+        gender: invitee?.gender || null,
+        paymentStatus: invitee?.paymentStatus || 'pending',
+        emailMasked: maskEmailAddress(invitee?.email),
+    },
+    room: room
+        ? {
+            _id: room._id,
+            roomNumber: room.roomNumber,
+            floor: room.floor,
+            capacity: room.capacity,
+            currentOccupants: room.currentOccupants,
+            availableSpaces: Math.max(0, (room.capacity || 0) - (room.currentOccupants || 0)),
+        }
+        : null,
+    hostel: hostel
+        ? {
+            _id: hostel._id,
+            name: hostel.name,
+            code: hostel.code,
+            gender: hostel.gender,
+            level: hostel.level,
+        }
+        : null,
+    eligibility: {
+        canInvite: validation.valid,
+        reason: validation.valid ? null : validation.message,
+        code: validation.code,
+    },
+    invitation: {
+        approvalWindowHours: config.RESERVATION_EXPIRY_HOURS,
+        requiresPaymentBeforeApproval: invitee?.paymentStatus !== 'paid',
+        notificationChannels: buildInvitationDeliveryChannels(invitee),
+    },
+});
+const getEntityId = (entity) => entity?._id || entity?.id || entity || null;
+const getInvitationEntryStudentId = (entry) => getEntityId(entry?.relatedStudent || entry?.actor);
+const getInvitationEntryRoomId = (entry) => getEntityId(entry?.room);
+const getInvitationEntriesForStudent = (entries = [], relatedStudentId, roomId, role) => entries
+    .filter((entry) => {
+    if (!entry || entry.role !== role) {
+        return false;
+    }
+    if (relatedStudentId && String(getInvitationEntryStudentId(entry)) !== String(relatedStudentId)) {
+        return false;
+    }
+    if (roomId && getInvitationEntryRoomId(entry) && String(getInvitationEntryRoomId(entry)) !== String(roomId)) {
+        return false;
+    }
+    return true;
+})
+    .sort((left, right) => new Date(right?.createdAt || 0).getTime() - new Date(left?.createdAt || 0).getTime());
+const getInviteTrackerStatus = (action, reservationStatus) => {
+    if (action === 'viewed') {
+        return 'seen';
+    }
+    if (action === 'approved' || action === 'rejected' || action === 'expired') {
+        return action;
+    }
+    if (reservationStatus === 'confirmed' || reservationStatus === 'checked_in') {
+        return 'approved';
+    }
+    if (reservationStatus === 'expired') {
+        return 'expired';
+    }
+    return 'sent';
+};
+const getInviteTrackerLabel = (status) => {
+    const labels = {
+        sent: 'Sent',
+        seen: 'Seen',
+        approved: 'Approved',
+        rejected: 'Rejected',
+        expired: 'Expired',
+    };
+    return labels[status] || 'Sent';
+};
+const getInviteTrackerMessage = (status, member) => {
+    const friendName = getStudentDisplayName(member, 'Your friend');
+    if (status === 'seen') {
+        return `${friendName} has opened the room invitation.`;
+    }
+    if (status === 'approved') {
+        return `${friendName} approved the room invitation.`;
+    }
+    if (status === 'rejected') {
+        return `${friendName} rejected the room invitation.`;
+    }
+    if (status === 'expired') {
+        return `${friendName}'s room invitation expired and the space was released.`;
+    }
+    return `${friendName}'s invitation has been sent and is waiting for a response.`;
+};
+const buildInviteTracker = (student) => {
+    const reservedById = getEntityId(student?.reservedBy);
+    const ownerId = getEntityId(student);
+    const roomId = getEntityId(student?.assignedRoom);
+    if (!ownerId || !reservedById || String(reservedById) !== String(ownerId)) {
+        return [];
+    }
+    return (student?.roommates || []).map((member) => {
+        const latestEntry = getInvitationEntriesForStudent(student?.invitationHistory || [], member?._id, roomId, 'inviter')[0] || null;
+        const status = getInviteTrackerStatus(latestEntry?.action, member?.reservationStatus);
+        return {
+            student: normalizeStudentForClient(member),
+            status,
+            label: getInviteTrackerLabel(status),
+            action: latestEntry?.action || 'invited',
+            lastUpdatedAt: latestEntry?.createdAt || member?.updatedAt || student?.reservedAt || null,
+            message: getInviteTrackerMessage(status, member),
+            requiresPaymentBeforeApproval: member?.paymentStatus !== 'paid',
+            emailMasked: maskEmailAddress(member?.email),
+        };
+    });
+};
+const markReservationInvitationViewed = async (student) => {
+    const inviterId = getEntityId(student?.reservedBy);
+    const inviteeId = getEntityId(student);
+    const roomId = getEntityId(student?.assignedRoom);
+    if (!inviteeId || !inviterId || String(inviterId) === String(inviteeId) || student?.reservationStatus !== 'temporary') {
+        return false;
+    }
+    const inviteEntries = getInvitationEntriesForStudent(student?.invitationHistory || [], inviterId, roomId, 'invitee');
+    const latestInvite = inviteEntries.find((entry) => entry.action === 'invited');
+    const latestView = inviteEntries.find((entry) => entry.action === 'viewed');
+    if (!latestInvite) {
+        return false;
+    }
+    if (latestView && new Date(latestView.createdAt || 0).getTime() >= new Date(latestInvite.createdAt || 0).getTime()) {
+        return false;
+    }
+    await invitationAuditService.logInvitationOutcome({
+        invitee: student,
+        inviter: inviterId,
+        actor: student._id,
+        action: 'viewed',
+        room: student.assignedRoom,
+        hostel: student.assignedHostel,
+        bunk: student.assignedBunk,
+        notes: 'Invitation viewed by the invited student',
+    });
+    return true;
+};
 const normalizeGroupMembers = (roommates = []) => roommates.map((roommate) => ({
     _id: roommate._id,
     id: roommate._id,
@@ -178,6 +425,22 @@ const buildInvitationAlert = (entry, reservationExpiresAt) => {
             message: deadline
                 ? `${relatedName} reserved ${location} for you. Approve it before ${deadline}.`
                 : `${relatedName} reserved ${location} for you. Review and approve it soon.`,
+            createdAt: historyEntry.createdAt,
+        };
+    }
+    if (historyEntry.action === 'viewed' && historyEntry.role === 'inviter') {
+        return {
+            type: 'info',
+            icon: 'eye-outline',
+            message: `${relatedName} viewed the invitation for ${location}.`,
+            createdAt: historyEntry.createdAt,
+        };
+    }
+    if (historyEntry.action === 'viewed' && historyEntry.role === 'invitee') {
+        return {
+            type: 'info',
+            icon: 'eye-outline',
+            message: `You opened the invitation for ${location}.`,
             createdAt: historyEntry.createdAt,
         };
     }
@@ -468,6 +731,7 @@ const buildReservationData = async (student) => {
         student: normalizeStudentForClient(student),
         roommates: student.roommates || [],
         groupMembers: normalizeGroupMembers(student.roommates || []),
+        inviteTracker: buildInviteTracker(student),
         reservedBy,
         approvalRequired: student.reservationStatus === 'temporary',
         invitationHistory: (student.invitationHistory || [])
@@ -476,6 +740,50 @@ const buildReservationData = async (student) => {
             .map(normalizeInvitationHistoryEntry)
             .filter(Boolean),
     };
+};
+const buildAvailableHostelQuery = (student) => {
+    const genderFilter = student.gender === 'male'
+        ? { gender: { $in: ['male', 'mixed'] } }
+        : { gender: { $in: ['female', 'mixed'] } };
+    return {
+        level: student.level,
+        isActive: true,
+        ...genderFilter,
+    };
+};
+const countAvailableHostelsForStudent = async (student) => {
+    const hostels = await Hostel.find(buildAvailableHostelQuery(student)).select('_id').lean();
+    if (!hostels.length) {
+        return 0;
+    }
+    const hostelIds = hostels.map((hostel) => hostel._id);
+    const availability = await Room.aggregate([
+        {
+            $match: {
+                hostel: { $in: hostelIds },
+                isActive: true,
+            },
+        },
+        {
+            $group: {
+                _id: '$hostel',
+                availableRooms: {
+                    $sum: {
+                        $cond: [{ $lt: ['$currentOccupants', '$capacity'] }, 1, 0],
+                    },
+                },
+            },
+        },
+        {
+            $match: {
+                availableRooms: { $gt: 0 },
+            },
+        },
+        {
+            $count: 'count',
+        },
+    ]);
+    return availability[0]?.count || 0;
 };
 const releaseStudentReservation = async (student) => {
     if (student.reservationStatus === 'checked_in') {
@@ -509,6 +817,7 @@ const releaseStudentReservation = async (student) => {
     student.reservedAt = null;
     student.reservationExpiresAt = null;
     student.reservedBy = null;
+    student.invitationReminderMarks = [];
     student.checkInDate = null;
     await student.save();
     cacheService.del(cacheService.cacheKeys.availableRooms(student.level));
@@ -681,14 +990,7 @@ exports.uploadProfilePicture = async (req, res) => {
 exports.getAvailableHostels = async (req, res) => {
     try {
         const student = req.user;
-        const genderFilter = student.gender === 'male'
-            ? { gender: { $in: ['male', 'mixed'] } }
-            : { gender: { $in: ['female', 'mixed'] } };
-        const hostels = await Hostel.find({
-            level: student.level,
-            isActive: true,
-            ...genderFilter
-        }).populate('portersAssigned');
+        const hostels = await Hostel.find(buildAvailableHostelQuery(student)).populate('portersAssigned');
         const hostelsWithAvailability = await Promise.all(hostels.map(async (hostel) => {
             const rooms = await Room.find({ hostel: hostel._id });
             const totalCapacity = rooms.reduce((sum, room) => sum + room.capacity, 0);
@@ -740,17 +1042,22 @@ exports.getAvailableRooms = async (req, res) => {
             .populate('bunks')
             .lean();
         const roomsWithAvailability = rooms.map(room => {
-            const totalBunks = room.bunks?.length || 0;
-            const availableBunks = room.bunks?.filter(bunk => bunk.status === 'available' && bunk.isActive).length || 0;
-            const takenBunks = room.bunks?.filter(bunk => bunk.status === 'occupied' || bunk.status === 'reserved').length || 0;
-            const reservedBunks = room.bunks?.filter(bunk => bunk.status === 'reserved').length || 0;
+            const totalCapacity = room.capacity || 0;
+            const activeBunks = room.bunks?.filter(bunk => bunk.isActive) || [];
+            const availableBunks = activeBunks.filter(bunk => bunk.status === 'available').length || 0;
+            const takenBunks = activeBunks.filter(bunk => bunk.status === 'occupied' || bunk.status === 'reserved').length || 0;
+            const reservedBunks = activeBunks.filter(bunk => bunk.status === 'reserved').length || 0;
+            const currentOccupants = Math.max(room.currentOccupants || 0, takenBunks);
+            const availableSpaces = Math.max(0, totalCapacity - currentOccupants);
             return {
                 ...room,
-                capacity: totalBunks,
-                currentOccupants: takenBunks,
-                availableSpaces: availableBunks,
+                capacity: totalCapacity,
+                currentOccupants,
+                currentOccupancy: currentOccupants,
+                availableSpaces,
+                availableBunks,
                 reservedSpaces: reservedBunks,
-                isAvailable: availableBunks > 0,
+                isAvailable: availableSpaces > 0,
             };
         });
         res.status(200).json({
@@ -777,6 +1084,79 @@ exports.getAvailableBunks = async (req, res) => {
     }
     catch (error) {
         res.status(500).json({ success: false, message: error.message });
+    }
+};
+exports.previewReservationInvite = async (req, res) => {
+    try {
+        const inviter = req.user;
+        const matricNo = String(req.body.matricNo || req.body.matricNumber || '').toUpperCase().trim();
+        const { roomId, hostelId } = req.body;
+        if (!matricNo) {
+            return res.status(400).json({
+                success: false,
+                message: 'Matric number is required',
+            });
+        }
+        if (!roomId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Room ID is required',
+            });
+        }
+        const room = await Room.findById(roomId).populate('hostel').lean();
+        if (!room) {
+            return res.status(404).json({
+                success: false,
+                message: 'Room not found or no longer available',
+            });
+        }
+        if (hostelId && String(room.hostel?._id || room.hostel) !== String(hostelId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Room does not belong to the selected hostel',
+            });
+        }
+        const invitee = await Student.findOne({
+            matricNo,
+            isActive: true,
+        })
+            .select('firstName lastName matricNo email gender level department reservationStatus paymentStatus notificationPreferences pushDevices isActive')
+            .populate('department', 'name code');
+        const validation = validateInvitationCandidate({
+            inviter,
+            invitee,
+            hostel: room.hostel,
+        });
+        if (!invitee) {
+            return res.status(validation.status).json({
+                success: false,
+                message: validation.message,
+            });
+        }
+        const payload = buildInvitationPreviewPayload({
+            invitee,
+            room,
+            hostel: room.hostel,
+            validation,
+        });
+        if (!validation.valid) {
+            return res.status(validation.status).json({
+                success: false,
+                message: validation.message,
+                data: payload,
+            });
+        }
+        res.status(200).json({
+            success: true,
+            message: `${invitee.firstName} ${invitee.lastName} is ready to receive a room invitation`,
+            data: payload,
+        });
+    }
+    catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to preview room invitation',
+        });
     }
 };
 exports.reserveRoom = async (req, res) => {
@@ -932,6 +1312,7 @@ exports.reserveRoom = async (req, res) => {
                 roommateStudent.reservationExpiresAt = bunk.reservedUntil;
                 roommateStudent.roommates = [student._id, ...roommates.filter(id => id !== roommateId)];
                 roommateStudent.reservedBy = student._id;
+                roommateStudent.invitationReminderMarks = [];
                 await roommateStudent.save();
                 roommateDetails.push({
                     id: roommateStudent._id,
@@ -1024,7 +1405,7 @@ exports.getReservation = async (req, res) => {
         })
             .populate({
             path: 'roommates',
-            select: 'firstName lastName matricNo level department reservationStatus email',
+            select: 'firstName lastName matricNo level department reservationStatus email paymentStatus updatedAt',
         });
         if (!student.assignedRoom || student.reservationStatus === 'none') {
             return res.status(404).json({ message: 'No reservation found' });
@@ -1034,6 +1415,7 @@ exports.getReservation = async (req, res) => {
             await Student.updateOne({ _id: student._id }, { $set: { reservedAt: fallback } });
             student.reservedAt = fallback;
         }
+        await markReservationInvitationViewed(student);
         const reservationData = await buildReservationData(student);
         res.status(200).json({
             success: true,
@@ -1055,8 +1437,9 @@ exports.getDashboard = async (req, res) => {
         })
             .populate({
             path: 'roommates',
-            select: 'firstName lastName matricNo email reservationStatus',
+            select: 'firstName lastName matricNo email reservationStatus paymentStatus updatedAt',
         });
+        const availableHostels = await countAvailableHostelsForStudent(student);
         const hasReservation = Boolean(student.assignedRoom && ACTIVE_RESERVATION_STATUSES.includes(student.reservationStatus));
         const reservation = hasReservation ? await buildReservationData(student) : null;
         res.status(200).json({
@@ -1067,6 +1450,7 @@ exports.getDashboard = async (req, res) => {
                 paymentStatus: student.paymentStatus,
                 reservationStatus: student.reservationStatus,
                 hasReservation,
+                availableHostels,
                 reservation,
                 currentSession: `${getCurrentAcademicYear()} ${getCurrentSemester()}`,
             },
@@ -1454,8 +1838,9 @@ exports.createReservation = async (req, res) => {
         let roommateIds = [];
         if (isGroupReservation && uniqueFriends.length > 0) {
             const friendStudents = await Student.find({
-                matricNo: { $in: uniqueFriends }
-            });
+                matricNo: { $in: uniqueFriends },
+                isActive: true,
+            }).populate('department', 'name code');
             if (friendStudents.length !== uniqueFriends.length) {
                 return res.status(400).json({
                     success: false,
@@ -1463,10 +1848,15 @@ exports.createReservation = async (req, res) => {
                 });
             }
             for (const friend of friendStudents) {
-                if (ACTIVE_RESERVATION_STATUSES.includes(friend.reservationStatus)) {
+                const invitationValidation = validateInvitationCandidate({
+                    inviter: student,
+                    invitee: friend,
+                    hostel: room.hostel,
+                });
+                if (!invitationValidation.valid) {
                     return res.status(400).json({
                         success: false,
-                        message: `${friend.firstName} ${friend.lastName} already has a reservation or pending invitation`
+                        message: invitationValidation.message,
                     });
                 }
             }
@@ -1538,6 +1928,7 @@ exports.createReservation = async (req, res) => {
                 roommateStudent.reservationExpiresAt = bunk.reservedUntil;
                 roommateStudent.roommates = [student._id, ...roommateIds.filter(id => id.toString() !== roommateId.toString())];
                 roommateStudent.reservedBy = student._id;
+                roommateStudent.invitationReminderMarks = [];
                 await roommateStudent.save();
                 roommateDetails.push({
                     id: roommateStudent._id,
@@ -1594,7 +1985,7 @@ exports.createReservation = async (req, res) => {
         res.status(201).json({
             success: true,
             message: isGroupReservation
-                ? `Group reservation successful! ${roommateDetails.length} invitation(s) sent to your friends.`
+                ? `Group reservation successful! ${roommateDetails.length} invitation(s) sent by email and StayHub notifications. Each friend has ${config.RESERVATION_EXPIRY_HOURS} hours to approve.`
                 : 'Reservation created successfully',
             data: responseData
         });
@@ -1656,7 +2047,10 @@ exports.addGroupMembers = async (req, res) => {
                 message: `Insufficient space. Room has ${availableSpace} available space(s), but ${uniqueMatrics.length} needed.`,
             });
         }
-        const newMembers = await Student.find({ matricNo: { $in: uniqueMatrics } });
+        const newMembers = await Student.find({
+            matricNo: { $in: uniqueMatrics },
+            isActive: true,
+        }).populate('department', 'name code');
         if (newMembers.length !== uniqueMatrics.length) {
             const foundMatrics = newMembers.map(s => s.matricNo);
             const missing = uniqueMatrics.filter(m => !foundMatrics.includes(m));
@@ -1672,10 +2066,15 @@ exports.addGroupMembers = async (req, res) => {
                     message: `${member.firstName} ${member.lastName} (${member.matricNo}) is already in this room`,
                 });
             }
-            if (ACTIVE_RESERVATION_STATUSES.includes(member.reservationStatus)) {
+            const invitationValidation = validateInvitationCandidate({
+                inviter: student,
+                invitee: member,
+                hostel: room.hostel,
+            });
+            if (!invitationValidation.valid) {
                 return res.status(400).json({
                     success: false,
-                    message: `${member.firstName} ${member.lastName} already has an active reservation or pending invitation`,
+                    message: invitationValidation.message,
                 });
             }
         }
@@ -1731,6 +2130,7 @@ exports.addGroupMembers = async (req, res) => {
                 ...otherNewMemberIds.map((id) => id.toString()),
             ].filter((id, index, array) => array.indexOf(id) === index && id !== member._id.toString());
             member.reservedBy = student.reservedBy || student._id;
+            member.invitationReminderMarks = [];
             await member.save();
             room.currentOccupants += 1;
             await room.save();
@@ -1765,7 +2165,7 @@ exports.addGroupMembers = async (req, res) => {
         cacheService.del(cacheService.cacheKeys.availableRooms(student.level));
         res.status(200).json({
             success: true,
-            message: `${groupMembers.length} invitation(s) sent to your friends`,
+            message: `${groupMembers.length} invitation(s) sent by email and StayHub notifications. Each friend has ${config.RESERVATION_EXPIRY_HOURS} hours to approve.`,
             data: {
                 groupMembers,
                 totalInRoom: room.currentOccupants,
@@ -1788,6 +2188,7 @@ exports.getInvitationHistory = async (req, res) => {
             .populate('invitationHistory.hostel', 'name code')
             .populate('invitationHistory.room', 'roomNumber')
             .populate('invitationHistory.bunk', 'bunkNumber');
+        await markReservationInvitationViewed(student);
         const history = (student?.invitationHistory || [])
             .slice(-20)
             .reverse()
@@ -1822,7 +2223,7 @@ exports.respondToReservationInvite = async (req, res) => {
         })
             .populate({
             path: 'roommates',
-            select: 'firstName lastName matricNo level department reservationStatus email',
+            select: 'firstName lastName matricNo level department reservationStatus email paymentStatus updatedAt',
         });
         if (!student || !student.assignedRoom || student.reservationStatus === 'none') {
             return res.status(404).json({
@@ -1895,6 +2296,7 @@ exports.respondToReservationInvite = async (req, res) => {
             });
         }
         student.reservationStatus = 'confirmed';
+        student.invitationReminderMarks = [];
         await student.save();
         if (inviter) {
             const notes = 'Invitation approved by the invited student';
@@ -1910,6 +2312,7 @@ exports.respondToReservationInvite = async (req, res) => {
                     notes,
                 }),
                 notificationService.notifyInvitationStatusUpdated(inviter._id || inviter, student._id, roomId, hostelId, 'approved', notes),
+                notificationService.notifyReservationConfirmed(student._id, roomId, student.assignedBunk?._id || student.assignedBunk, hostelId),
             ]);
         }
         const reservationData = await buildReservationData(student);

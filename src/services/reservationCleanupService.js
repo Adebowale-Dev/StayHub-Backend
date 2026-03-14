@@ -7,6 +7,53 @@ const notificationService = require('./notificationService');
 const invitationAuditService = require('./invitationAuditService');
 let cleanupIntervalHandle = null;
 const isInvitationReservation = (student) => student?.reservedBy && String(student.reservedBy?._id || student.reservedBy) !== String(student._id);
+const getReminderThresholds = () => String(config.INVITATION_REMINDER_HOURS || '12,2')
+    .split(',')
+    .map((value) => Number(String(value).trim()))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => left - right);
+const getReminderMark = (student, thresholdHours) => {
+    const expiryKey = student?.reservationExpiresAt
+        ? new Date(student.reservationExpiresAt).toISOString()
+        : 'open';
+    return `${thresholdHours}:${expiryKey}`;
+};
+const sendInvitationReminders = async () => {
+    const thresholds = getReminderThresholds();
+    if (thresholds.length === 0) {
+        return 0;
+    }
+    const now = new Date();
+    const pendingInvites = await Student.find({
+        reservationStatus: 'temporary',
+        reservationExpiresAt: { $gt: now },
+    }).populate('assignedHostel assignedRoom reservedBy');
+    let sentCount = 0;
+    for (const student of pendingInvites) {
+        const inviterId = student.reservedBy?._id || student.reservedBy;
+        const roomId = student.assignedRoom?._id || student.assignedRoom;
+        const hostelId = student.assignedHostel?._id || student.assignedHostel;
+        if (!inviterId || !roomId || !hostelId) {
+            continue;
+        }
+        const hoursLeft = (new Date(student.reservationExpiresAt).getTime() - now.getTime()) / (1000 * 60 * 60);
+        const marks = Array.isArray(student.invitationReminderMarks) ? student.invitationReminderMarks : [];
+        const nextThreshold = thresholds.find((thresholdHours) => hoursLeft <= thresholdHours && !marks.includes(getReminderMark(student, thresholdHours)));
+        if (!nextThreshold) {
+            continue;
+        }
+        try {
+            await notificationService.notifyInvitationReminder(student._id, inviterId, roomId, hostelId, student.reservationExpiresAt, nextThreshold);
+            student.invitationReminderMarks = [...marks, getReminderMark(student, nextThreshold)];
+            await student.save();
+            sentCount += 1;
+        }
+        catch (error) {
+            console.error(`Failed to send invitation reminder to ${student.matricNo}:`, error);
+        }
+    }
+    return sentCount;
+};
 const releaseExpiredReservations = async ({ hostelId } = {}) => {
     const query = {
         reservationStatus: { $in: ['temporary', 'confirmed'] },
@@ -57,6 +104,7 @@ const releaseExpiredReservations = async ({ hostelId } = {}) => {
             ]);
         }
         student.reservationStatus = 'expired';
+        student.invitationReminderMarks = [];
         await student.save();
         cacheService.del(cacheService.cacheKeys.availableRooms(student.level));
     }
@@ -70,6 +118,10 @@ const startReservationCleanupJob = () => {
     const intervalMs = Math.max(1, intervalMinutes) * 60 * 1000;
     cleanupIntervalHandle = setInterval(async () => {
         try {
+            const reminderCount = await sendInvitationReminders();
+            if (reminderCount > 0) {
+                console.log(`Invitation reminder job sent ${reminderCount} reminder(s).`);
+            }
             const releasedCount = await releaseExpiredReservations();
             if (releasedCount > 0) {
                 console.log(`Reservation cleanup released ${releasedCount} expired reservation(s).`);
@@ -87,5 +139,6 @@ const startReservationCleanupJob = () => {
 };
 module.exports = {
     releaseExpiredReservations,
+    sendInvitationReminders,
     startReservationCleanupJob,
 };

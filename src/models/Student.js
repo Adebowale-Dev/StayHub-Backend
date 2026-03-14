@@ -122,10 +122,14 @@ const studentSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Student',
     },
+    invitationReminderMarks: [{
+            type: String,
+            trim: true,
+        }],
     invitationHistory: [{
             action: {
                 type: String,
-                enum: ['invited', 'approved', 'rejected', 'expired'],
+                enum: ['invited', 'viewed', 'approved', 'rejected', 'expired'],
                 required: true,
             },
             role: {
