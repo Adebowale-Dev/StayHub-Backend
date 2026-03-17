@@ -6,7 +6,165 @@ const config = require('../config/env');
 const notificationService = require('./notificationService');
 const invitationAuditService = require('./invitationAuditService');
 let cleanupIntervalHandle = null;
+const ACTIVE_RESERVATION_STATUSES = ['temporary', 'confirmed', 'checked_in'];
 const isInvitationReservation = (student) => student?.reservedBy && String(student.reservedBy?._id || student.reservedBy) !== String(student._id);
+const getEntityId = (entity) => entity?._id || entity || null;
+const populateStudentReservationContext = (query) => query
+    .populate('assignedHostel assignedRoom assignedBunk reservedBy')
+    .populate('roommates', '_id');
+const loadStudentReservationContext = async (studentInput) => {
+    if (!studentInput) {
+        return null;
+    }
+    if (studentInput?._id && typeof studentInput.save === 'function') {
+        return studentInput;
+    }
+    return populateStudentReservationContext(Student.findById(studentInput));
+};
+const syncRoomOccupancy = async (roomId) => {
+    if (!roomId) {
+        return null;
+    }
+    const room = await Room.findById(roomId);
+    if (!room) {
+        return null;
+    }
+    const occupantCount = await Student.countDocuments({
+        assignedRoom: roomId,
+        reservationStatus: { $in: ACTIVE_RESERVATION_STATUSES },
+    });
+    room.currentOccupants = occupantCount;
+    await room.updateStatus();
+    return room;
+};
+const releaseStudentReservationState = async (studentInput, options = {}) => {
+    const student = await loadStudentReservationContext(studentInput);
+    if (!student) {
+        return null;
+    }
+    const finalStatus = options.finalStatus || 'none';
+    const notes = options.notes || 'Reservation released automatically';
+    const shouldNotifyInviter = options.notifyInviter !== false;
+    const roomId = getEntityId(student.assignedRoom);
+    const hostelId = getEntityId(student.assignedHostel);
+    const bunkId = getEntityId(student.assignedBunk);
+    const reservedById = getEntityId(student.reservedBy);
+    const roommateIds = (student.roommates || []).map((roommate) => getEntityId(roommate)).filter(Boolean);
+    const wasInvitationReservation = isInvitationReservation(student);
+    if (bunkId) {
+        await Bunk.findByIdAndUpdate(bunkId, {
+            status: 'available',
+            occupiedByStudent: null,
+            reservedUntil: null,
+        });
+    }
+    if (roommateIds.length > 0) {
+        await Student.updateMany({ _id: { $in: roommateIds } }, { $pull: { roommates: student._id } });
+    }
+    student.assignedHostel = null;
+    student.assignedRoom = null;
+    student.assignedBunk = null;
+    student.roommates = [];
+    student.reservationStatus = finalStatus;
+    student.reservedAt = null;
+    student.reservationExpiresAt = null;
+    student.reservedBy = null;
+    student.invitationReminderMarks = [];
+    student.checkInDate = finalStatus === 'checked_in' ? student.checkInDate : null;
+    await student.save();
+    if (roomId) {
+        await syncRoomOccupancy(roomId);
+    }
+    if (shouldNotifyInviter && finalStatus === 'expired' && wasInvitationReservation && reservedById) {
+        await Promise.allSettled([
+            invitationAuditService.logInvitationOutcome({
+                invitee: student,
+                inviter: reservedById,
+                actor: student._id,
+                action: 'expired',
+                room: roomId,
+                hostel: hostelId,
+                bunk: bunkId,
+                notes,
+            }),
+            notificationService.notifyInvitationStatusUpdated(reservedById, student._id, roomId, hostelId, 'expired', notes),
+        ]);
+    }
+    cacheService.del(cacheService.cacheKeys.availableRooms(student.level));
+    return student;
+};
+const reconcileStudentReservationState = async (studentInput, options = {}) => {
+    const student = await loadStudentReservationContext(studentInput);
+    if (!student) {
+        return null;
+    }
+    const now = options.now ? new Date(options.now) : new Date();
+    const roomId = getEntityId(student.assignedRoom);
+    const bunkId = getEntityId(student.assignedBunk);
+    const hostelId = getEntityId(student.assignedHostel);
+    const hasAssignmentState = Boolean(roomId || bunkId || hostelId || (student.roommates || []).length || student.reservationExpiresAt || student.reservedAt || student.reservedBy);
+    if (student.reservationStatus === 'checked_in') {
+        if (!roomId || !bunkId || !hostelId) {
+            return releaseStudentReservationState(student, {
+                finalStatus: 'none',
+                notifyInviter: false,
+                notes: 'Checked-in reservation state was incomplete and has been reset',
+            });
+        }
+        let changed = false;
+        if (student.reservationExpiresAt) {
+            student.reservationExpiresAt = null;
+            changed = true;
+        }
+        if (bunkId) {
+            const bunk = await Bunk.findById(bunkId);
+            if (bunk && (bunk.status !== 'occupied' || String(getEntityId(bunk.occupiedByStudent) || '') !== String(student._id) || bunk.reservedUntil)) {
+                bunk.status = 'occupied';
+                bunk.occupiedByStudent = student._id;
+                bunk.reservedUntil = null;
+                await bunk.save();
+            }
+        }
+        if (changed) {
+            await student.save();
+        }
+        if (roomId) {
+            await syncRoomOccupancy(roomId);
+        }
+        return student;
+    }
+    if ((student.reservationStatus === 'temporary' || student.reservationStatus === 'confirmed')
+        && student.reservationExpiresAt
+        && new Date(student.reservationExpiresAt) <= now) {
+        return releaseStudentReservationState(student, {
+            finalStatus: 'expired',
+            notes: 'Reservation hold expired and was released automatically',
+        });
+    }
+    if ((student.reservationStatus === 'temporary' || student.reservationStatus === 'confirmed')
+        && (!roomId || !bunkId || !hostelId)) {
+        return releaseStudentReservationState(student, {
+            finalStatus: 'none',
+            notifyInviter: false,
+            notes: 'Reservation state was incomplete and has been reset',
+        });
+    }
+    if (student.reservationStatus === 'expired' && hasAssignmentState) {
+        return releaseStudentReservationState(student, {
+            finalStatus: 'expired',
+            notifyInviter: false,
+            notes: 'Expired reservation state was normalized',
+        });
+    }
+    if (student.reservationStatus === 'none' && hasAssignmentState) {
+        return releaseStudentReservationState(student, {
+            finalStatus: 'none',
+            notifyInviter: false,
+            notes: 'Stale reservation fields were cleared',
+        });
+    }
+    return student;
+};
 const getReminderThresholds = () => String(config.INVITATION_REMINDER_HOURS || '12,2')
     .split(',')
     .map((value) => Number(String(value).trim()))
@@ -62,51 +220,12 @@ const releaseExpiredReservations = async ({ hostelId } = {}) => {
     if (hostelId) {
         query.assignedHostel = hostelId;
     }
-    const expiredStudents = await Student.find(query)
-        .populate('assignedHostel assignedRoom assignedBunk reservedBy')
-        .populate('roommates', '_id');
+    const expiredStudents = await populateStudentReservationContext(Student.find(query));
     for (const student of expiredStudents) {
-        const roomId = student.assignedRoom?._id || student.assignedRoom;
-        const hostelIdValue = student.assignedHostel?._id || student.assignedHostel;
-        const bunkId = student.assignedBunk?._id || student.assignedBunk;
-        if (bunkId) {
-            await Bunk.findByIdAndUpdate(bunkId, {
-                status: 'available',
-                occupiedByStudent: null,
-                reservedUntil: null,
-            });
-        }
-        if (roomId) {
-            const room = await Room.findById(roomId);
-            if (room) {
-                room.currentOccupants = Math.max(0, room.currentOccupants - 1);
-                await room.updateStatus();
-            }
-        }
-        if (student.roommates?.length) {
-            await Student.updateMany({ _id: { $in: student.roommates.map((roommate) => roommate._id || roommate) } }, { $pull: { roommates: student._id } });
-        }
-        if (isInvitationReservation(student)) {
-            const notes = 'Invitation expired before check-in';
-            const inviterId = student.reservedBy?._id || student.reservedBy;
-            await Promise.allSettled([
-                invitationAuditService.logInvitationOutcome({
-                    invitee: student,
-                    inviter: inviterId,
-                    actor: student._id,
-                    action: 'expired',
-                    room: student.assignedRoom,
-                    hostel: student.assignedHostel,
-                    bunk: student.assignedBunk,
-                    notes,
-                }),
-                notificationService.notifyInvitationStatusUpdated(inviterId, student._id, roomId, hostelIdValue, 'expired', notes),
-            ]);
-        }
-        student.reservationStatus = 'expired';
-        student.invitationReminderMarks = [];
-        await student.save();
-        cacheService.del(cacheService.cacheKeys.availableRooms(student.level));
+        await releaseStudentReservationState(student, {
+            finalStatus: 'expired',
+            notes: 'Invitation expired before check-in',
+        });
     }
     return expiredStudents.length;
 };
@@ -138,6 +257,8 @@ const startReservationCleanupJob = () => {
     return cleanupIntervalHandle;
 };
 module.exports = {
+    reconcileStudentReservationState,
+    releaseStudentReservationState,
     releaseExpiredReservations,
     sendInvitationReminders,
     startReservationCleanupJob,

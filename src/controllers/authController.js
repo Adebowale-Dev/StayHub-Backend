@@ -4,6 +4,7 @@ const Porter = require('../models/Porter');
 const jwt = require('jsonwebtoken');
 const { generateToken } = require('../middlewares/authMiddleware');
 const { generateDefaultPassword } = require('../utils/passwordUtils');
+const { buildProfilePictureUrl, updateStudentProfile } = require('../utils/studentProfileUtils');
 const config = require('../config/env');
 const emailService = require('../services/emailService');
 const login = async (req, res) => {
@@ -82,6 +83,7 @@ const login = async (req, res) => {
             userResponse.level = user.level;
             userResponse.gender = user.gender;
             userResponse.phoneNumber = user.phoneNumber;
+            userResponse.profilePicture = user.profilePicture;
             userResponse.college = user.college;
             userResponse.department = user.department;
             userResponse.paymentStatus = user.paymentStatus;
@@ -300,13 +302,7 @@ const updateProfile = async (req, res) => {
                 studentUpdate.email = updateData.email.toLowerCase();
             }
             console.log('Student update object:', studentUpdate);
-            updatedUser = await Student.findByIdAndUpdate(userId, studentUpdate, { new: true, runValidators: true })
-                .select('-password')
-                .populate('college', 'name')
-                .populate('department', 'name')
-                .populate('assignedHostel', 'name code')
-                .populate('assignedRoom', 'roomNumber')
-                .populate('assignedBunk', 'bunkNumber');
+            updatedUser = await updateStudentProfile(userId, studentUpdate);
         }
         if (!updatedUser) {
             console.log('User not found for update:', userId);
@@ -343,6 +339,59 @@ const updateProfile = async (req, res) => {
         res.status(500).json({
             success: false,
             message: error.message || 'Server error while updating profile',
+        });
+    }
+};
+const uploadProfilePicture = async (req, res) => {
+    try {
+        if (req.userRole !== 'student') {
+            return res.status(403).json({
+                success: false,
+                message: 'Only students can upload a profile picture',
+            });
+        }
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                message: 'No image file provided',
+            });
+        }
+        const pictureUrl = buildProfilePictureUrl(req, req.file.filename);
+        const updatedUser = await updateStudentProfile(req.user._id, {
+            profilePicture: pictureUrl,
+        });
+        if (!updatedUser) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found',
+            });
+        }
+        const userObject = updatedUser.toObject();
+        if (userObject.firstName && userObject.lastName) {
+            userObject.name = `${userObject.firstName} ${userObject.lastName}`;
+        }
+        else if (userObject.firstName) {
+            userObject.name = userObject.firstName;
+        }
+        else if (userObject.lastName) {
+            userObject.name = userObject.lastName;
+        }
+        userObject.matricNumber = userObject.matricNo;
+        userObject.phone = userObject.phoneNumber;
+        res.status(200).json({
+            success: true,
+            message: 'Profile picture updated successfully',
+            user: userObject,
+            data: {
+                student: userObject,
+            },
+        });
+    }
+    catch (error) {
+        console.error('Upload profile picture error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Server error while uploading profile picture',
         });
     }
 };
@@ -471,6 +520,7 @@ module.exports = {
     changePassword,
     getProfile,
     updateProfile,
+    uploadProfilePicture,
     logout,
     forgotPassword,
     resetPassword,

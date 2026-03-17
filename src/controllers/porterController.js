@@ -156,11 +156,14 @@ exports.checkInStudent = async (req, res) => {
         console.log('✅ All validations passed. Checking in student...');
         student.reservationStatus = 'checked_in';
         student.checkInDate = new Date();
+        student.reservationExpiresAt = null;
+        student.invitationReminderMarks = [];
         await student.save();
         console.log('✅ Student status updated to checked_in');
         const bunk = await Bunk.findById(student.assignedBunk);
         if (bunk) {
             bunk.status = 'occupied';
+            bunk.reservedUntil = null;
             await bunk.save();
             console.log('✅ Bunk status updated to occupied');
         }

@@ -6,7 +6,10 @@ const Department = require('../models/Department');
 const notificationService = require('../services/notificationService');
 const invitationAuditService = require('../services/invitationAuditService');
 const cacheService = require('../services/cacheService');
+const { reconcileStudentReservationState, releaseStudentReservationState } = require('../services/reservationCleanupService');
 const { addHours, getCurrentAcademicYear, getCurrentSemester } = require('../utils/dateUtils');
+const { syncRoomBunksToCapacity } = require('../utils/roomBunkUtils');
+const { buildProfilePictureUrl, updateStudentProfile } = require('../utils/studentProfileUtils');
 const config = require('../config/env');
 const ACTIVE_RESERVATION_STATUSES = ['temporary', 'confirmed', 'checked_in'];
 const EXPO_PUSH_TOKEN_PATTERN = /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/;
@@ -178,6 +181,58 @@ const buildInvitationPreviewPayload = ({ invitee, room, hostel, validation }) =>
         notificationChannels: buildInvitationDeliveryChannels(invitee),
     },
 });
+const getRoomInventorySnapshot = async (room, options = {}) => {
+    const inventory = await syncRoomBunksToCapacity(room, {
+        failOnBlockingExtraBunks: false,
+        ...options,
+    });
+    const reservedBunks = inventory.activeBunks.filter((bunk) => bunk.status === 'reserved');
+    const currentOccupants = Math.max(Number(room?.currentOccupants || 0), inventory.occupiedOrReservedBunks.length);
+    return {
+        ...inventory,
+        currentOccupants,
+        reservedBunks,
+        availableSpaces: inventory.availableBunks.length,
+    };
+};
+const getReservationConflictCode = (reservationStatus) => {
+    if (reservationStatus === 'checked_in') {
+        return 'already_checked_in';
+    }
+    if (reservationStatus === 'temporary') {
+        return 'pending_invitation_exists';
+    }
+    if (reservationStatus === 'confirmed') {
+        return 'active_reservation_exists';
+    }
+    return 'reservation_conflict';
+};
+const buildReservationConflictMessage = (student, reservationData) => {
+    const roomNumber = reservationData?.room?.roomNumber || student?.assignedRoom?.roomNumber || 'your current room';
+    const hostelName = reservationData?.hostel?.name || student?.assignedHostel?.name || 'your assigned hostel';
+    if (student?.reservationStatus === 'checked_in') {
+        return `You are already checked into Room ${roomNumber} in ${hostelName}. Visit the porter desk or contact the administrator if you need a room change.`;
+    }
+    if (student?.reservationStatus === 'temporary') {
+        return `You already have a pending room invitation for Room ${roomNumber} in ${hostelName}. Open your reservation page to approve or reject it first.`;
+    }
+    if (student?.reservationStatus === 'confirmed') {
+        return `You already have an active reservation for Room ${roomNumber} in ${hostelName}. Open your reservation page to view it first.`;
+    }
+    return 'You already have an active reservation or pending invitation. Please open your reservation page first.';
+};
+const sendReservationConflict = async (res, student) => {
+    const currentReservation = await buildReservationData(student);
+    return res.status(409).json({
+        success: false,
+        code: getReservationConflictCode(student?.reservationStatus),
+        message: buildReservationConflictMessage(student, currentReservation),
+        data: {
+            reservation: currentReservation,
+            reservationStatus: student?.reservationStatus || 'none',
+        },
+    });
+};
 const getEntityId = (entity) => entity?._id || entity?.id || entity || null;
 const getInvitationEntryStudentId = (entry) => getEntityId(entry?.relatedStudent || entry?.actor);
 const getInvitationEntryRoomId = (entry) => getEntityId(entry?.room);
@@ -789,38 +844,11 @@ const releaseStudentReservation = async (student) => {
     if (student.reservationStatus === 'checked_in') {
         throw new Error('Checked-in reservations cannot be canceled from the student portal');
     }
-    const roomId = student.assignedRoom?._id || student.assignedRoom;
-    const bunkId = student.assignedBunk?._id || student.assignedBunk;
-    const roommateIds = (student.roommates || []).map((roommate) => roommate._id || roommate);
-    if (bunkId) {
-        await Bunk.findByIdAndUpdate(bunkId, {
-            status: 'available',
-            occupiedByStudent: null,
-            reservedUntil: null,
-        });
-    }
-    if (roomId) {
-        const room = await Room.findById(roomId);
-        if (room) {
-            room.currentOccupants = Math.max(0, room.currentOccupants - 1);
-            await room.updateStatus();
-        }
-    }
-    if (roommateIds.length > 0) {
-        await Student.updateMany({ _id: { $in: roommateIds } }, { $pull: { roommates: student._id } });
-    }
-    student.assignedHostel = null;
-    student.assignedRoom = null;
-    student.assignedBunk = null;
-    student.roommates = [];
-    student.reservationStatus = 'none';
-    student.reservedAt = null;
-    student.reservationExpiresAt = null;
-    student.reservedBy = null;
-    student.invitationReminderMarks = [];
-    student.checkInDate = null;
-    await student.save();
-    cacheService.del(cacheService.cacheKeys.availableRooms(student.level));
+    await releaseStudentReservationState(student, {
+        finalStatus: 'none',
+        notifyInviter: false,
+        notes: 'Reservation released by the student',
+    });
 };
 exports.updateProfile = async (req, res) => {
     try {
@@ -973,15 +1001,17 @@ exports.uploadProfilePicture = async (req, res) => {
         if (!req.file) {
             return res.status(400).json({ success: false, message: 'No image file provided' });
         }
-        const pictureUrl = `${req.protocol}://${req.get('host')}/uploads/profile-pictures/${req.file.filename}`;
-        const student = await Student.findByIdAndUpdate(req.user._id, { profilePicture: pictureUrl }, { new: true })
-            .select('-password')
-            .populate('college', 'name code')
-            .populate('department', 'name code')
-            .populate('assignedHostel', 'name')
-            .populate('assignedRoom', 'roomNumber')
-            .populate('assignedBunk', 'bunkNumber');
-        res.status(200).json({ data: { student } });
+        const pictureUrl = buildProfilePictureUrl(req, req.file.filename);
+        const student = await updateStudentProfile(req.user._id, { profilePicture: pictureUrl });
+        if (!student) {
+            return res.status(404).json({ success: false, message: 'Student not found' });
+        }
+        res.status(200).json({
+            success: true,
+            message: 'Profile picture updated successfully',
+            data: { student },
+            student,
+        });
     }
     catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -989,7 +1019,7 @@ exports.uploadProfilePicture = async (req, res) => {
 };
 exports.getAvailableHostels = async (req, res) => {
     try {
-        const student = req.user;
+        const student = await reconcileStudentReservationState(req.user);
         const hostels = await Hostel.find(buildAvailableHostelQuery(student)).populate('portersAssigned');
         const hostelsWithAvailability = await Promise.all(hostels.map(async (hostel) => {
             const rooms = await Room.find({ hostel: hostel._id });
@@ -1039,27 +1069,21 @@ exports.getAvailableRooms = async (req, res) => {
             hostel: hostelId,
             isActive: true,
         })
-            .populate('bunks')
             .lean();
-        const roomsWithAvailability = rooms.map(room => {
+        const roomsWithAvailability = await Promise.all(rooms.map(async (room) => {
+            const inventory = await getRoomInventorySnapshot(room);
             const totalCapacity = room.capacity || 0;
-            const activeBunks = room.bunks?.filter(bunk => bunk.isActive) || [];
-            const availableBunks = activeBunks.filter(bunk => bunk.status === 'available').length || 0;
-            const takenBunks = activeBunks.filter(bunk => bunk.status === 'occupied' || bunk.status === 'reserved').length || 0;
-            const reservedBunks = activeBunks.filter(bunk => bunk.status === 'reserved').length || 0;
-            const currentOccupants = Math.max(room.currentOccupants || 0, takenBunks);
-            const availableSpaces = Math.max(0, totalCapacity - currentOccupants);
             return {
                 ...room,
                 capacity: totalCapacity,
-                currentOccupants,
-                currentOccupancy: currentOccupants,
-                availableSpaces,
-                availableBunks,
-                reservedSpaces: reservedBunks,
-                isAvailable: availableSpaces > 0,
+                currentOccupants: inventory.currentOccupants,
+                currentOccupancy: inventory.currentOccupants,
+                availableSpaces: inventory.availableSpaces,
+                availableBunks: inventory.availableBunks.length,
+                reservedSpaces: inventory.reservedBunks.length,
+                isAvailable: inventory.availableSpaces > 0,
             };
-        });
+        }));
         res.status(200).json({
             success: true,
             data: roomsWithAvailability,
@@ -1072,14 +1096,17 @@ exports.getAvailableRooms = async (req, res) => {
 exports.getAvailableBunks = async (req, res) => {
     try {
         const { roomId } = req.params;
-        const bunks = await Bunk.find({
-            room: roomId,
-            status: 'available',
-            isActive: true,
-        });
+        const room = await Room.findById(roomId).select('_id capacity currentOccupants');
+        if (!room) {
+            return res.status(404).json({
+                success: false,
+                message: 'Room not found',
+            });
+        }
+        const inventory = await getRoomInventorySnapshot(room);
         res.status(200).json({
             success: true,
-            data: bunks,
+            data: inventory.availableBunks,
         });
     }
     catch (error) {
@@ -1088,7 +1115,7 @@ exports.getAvailableBunks = async (req, res) => {
 };
 exports.previewReservationInvite = async (req, res) => {
     try {
-        const inviter = req.user;
+        const inviter = await reconcileStudentReservationState(req.user);
         const matricNo = String(req.body.matricNo || req.body.matricNumber || '').toUpperCase().trim();
         const { roomId, hostelId } = req.body;
         if (!matricNo) {
@@ -1116,12 +1143,13 @@ exports.previewReservationInvite = async (req, res) => {
                 message: 'Room does not belong to the selected hostel',
             });
         }
-        const invitee = await Student.findOne({
+        const inviteeRecord = await Student.findOne({
             matricNo,
             isActive: true,
         })
             .select('firstName lastName matricNo email gender level department reservationStatus paymentStatus notificationPreferences pushDevices isActive')
             .populate('department', 'name code');
+        const invitee = inviteeRecord ? await reconcileStudentReservationState(inviteeRecord) : null;
         const validation = validateInvitationCandidate({
             inviter,
             invitee,
@@ -1161,7 +1189,7 @@ exports.previewReservationInvite = async (req, res) => {
 };
 exports.reserveRoom = async (req, res) => {
     try {
-        const student = req.user;
+        const student = await reconcileStudentReservationState(req.user);
         const { roomId, bunkId, roommates, isGroupReservation } = req.body;
         if (student.paymentStatus !== 'paid') {
             console.log('❌ Payment required');
@@ -1172,10 +1200,7 @@ exports.reserveRoom = async (req, res) => {
         }
         if (ACTIVE_RESERVATION_STATUSES.includes(student.reservationStatus)) {
             console.log('❌ Already reserved:', student.reservationStatus);
-            return res.status(400).json({
-                success: false,
-                message: 'You already have an active reservation or pending invitation',
-            });
+            return sendReservationConflict(res, student);
         }
         const room = await Room.findById(roomId).populate('hostel');
         console.log('Room found:', room ? `${room.roomNumber} (${room._id})` : 'Not found');
@@ -1193,9 +1218,10 @@ exports.reserveRoom = async (req, res) => {
             status: room.status,
             hostel: room.hostel.name
         });
+        const roomInventory = await getRoomInventorySnapshot(room);
         if (isGroupReservation && roommates && roommates.length > 0) {
             const requiredBunks = roommates.length + 1;
-            const availableSpace = room.capacity - room.currentOccupants;
+            const availableSpace = roomInventory.availableSpaces;
             console.log('Group reservation check:', {
                 requiredBunks,
                 availableSpace,
@@ -1208,7 +1234,10 @@ exports.reserveRoom = async (req, res) => {
                 });
             }
             for (const roommateId of roommates) {
-                const roommate = await Student.findById(roommateId);
+                const roommateRecord = await Student.findById(roommateId);
+                const roommate = roommateRecord
+                    ? await reconcileStudentReservationState(roommateRecord)
+                    : null;
                 if (!roommate) {
                     return res.status(404).json({
                         success: false,
@@ -1247,13 +1276,15 @@ exports.reserveRoom = async (req, res) => {
                     message: 'Bunk is not available',
                 });
             }
+            if (!bunk.isActive) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Bunk is not available',
+                });
+            }
         }
         else {
-            bunk = await Bunk.findOne({
-                room: room._id,
-                status: 'available',
-                isActive: true
-            });
+            [bunk] = roomInventory.availableBunks;
             console.log('✓ Auto-selected bunk:', bunk ? bunk.bunkNumber : 'None available');
             if (!bunk) {
                 return res.status(404).json({
@@ -1262,7 +1293,7 @@ exports.reserveRoom = async (req, res) => {
                 });
             }
         }
-        if (room.currentOccupants >= room.capacity) {
+        if (roomInventory.availableSpaces < 1) {
             console.log('Room full:', { current: room.currentOccupants, capacity: room.capacity });
             return res.status(400).json({
                 success: false,
@@ -1283,12 +1314,22 @@ exports.reserveRoom = async (req, res) => {
         if (isGroupReservation && roommates && roommates.length > 0) {
             student.roommates = roommates;
             console.log(`🤝 Processing group reservation for ${roommates.length} roommates...`);
-            for (const roommateId of roommates) {
-                const roommateBunk = await Bunk.findOne({
-                    room: room._id,
-                    status: 'available',
-                    isActive: true
+            const roommateBunks = roomInventory.availableBunks
+                .filter((availableBunk) => availableBunk._id.toString() !== bunk._id.toString())
+                .slice(0, roommates.length);
+            if (roommateBunks.length < roommates.length) {
+                bunk.status = 'available';
+                bunk.occupiedByStudent = null;
+                bunk.reservedUntil = null;
+                await bunk.save();
+                return res.status(400).json({
+                    success: false,
+                    message: 'Not enough available bunks for group reservation',
                 });
+            }
+            for (let index = 0; index < roommates.length; index += 1) {
+                const roommateId = roommates[index];
+                const roommateBunk = roommateBunks[index];
                 if (!roommateBunk) {
                     bunk.status = 'available';
                     bunk.occupiedByStudent = null;
@@ -1782,7 +1823,7 @@ exports.createReservation = async (req, res) => {
         const isGroupReservation = typeof req.body.isGroupReservation === 'boolean'
             ? req.body.isGroupReservation
             : uniqueFriends.length > 0;
-        const student = req.user;
+        const student = await reconcileStudentReservationState(req.user);
         console.log('📋 Room reservation request:', {
             studentId: student._id,
             roomId,
@@ -1797,10 +1838,7 @@ exports.createReservation = async (req, res) => {
             });
         }
         if (ACTIVE_RESERVATION_STATUSES.includes(student.reservationStatus)) {
-            return res.status(400).json({
-                success: false,
-                message: 'You already have an active reservation or pending invitation. Please clear it first.'
-            });
+            return sendReservationConflict(res, student);
         }
         if (normalizedFriends.length !== uniqueFriends.length) {
             return res.status(400).json({
@@ -1827,8 +1865,9 @@ exports.createReservation = async (req, res) => {
                 message: 'Room does not belong to the selected hostel'
             });
         }
+        const roomInventory = await getRoomInventorySnapshot(room);
         const requiredBunks = isGroupReservation ? uniqueFriends.length + 1 : 1;
-        const availableSpace = room.capacity - room.currentOccupants;
+        const availableSpace = roomInventory.availableSpaces;
         if (availableSpace < requiredBunks) {
             return res.status(400).json({
                 success: false,
@@ -1847,7 +1886,8 @@ exports.createReservation = async (req, res) => {
                     message: 'One or more friend matric numbers not found'
                 });
             }
-            for (const friend of friendStudents) {
+            const reconciledFriendStudents = await Promise.all(friendStudents.map((friend) => reconcileStudentReservationState(friend)));
+            for (const friend of reconciledFriendStudents) {
                 const invitationValidation = validateInvitationCandidate({
                     inviter: student,
                     invitee: friend,
@@ -1860,13 +1900,9 @@ exports.createReservation = async (req, res) => {
                     });
                 }
             }
-            roommateIds = friendStudents.map(f => f._id);
+            roommateIds = reconciledFriendStudents.map(f => f._id);
         }
-        const bunk = await Bunk.findOne({
-            room: room._id,
-            status: 'available',
-            isActive: true
-        });
+        const [bunk] = roomInventory.availableBunks;
         if (!bunk) {
             return res.status(404).json({
                 success: false,
@@ -1889,12 +1925,12 @@ exports.createReservation = async (req, res) => {
         room.currentOccupants += 1;
         let roommateDetails = [];
         if (isGroupReservation && roommateIds.length > 0) {
-            for (const roommateId of roommateIds) {
-                const roommateBunk = await Bunk.findOne({
-                    room: room._id,
-                    status: 'available',
-                    isActive: true
-                });
+            const roommateBunks = roomInventory.availableBunks
+                .filter((availableBunk) => availableBunk._id.toString() !== bunk._id.toString())
+                .slice(0, roommateIds.length);
+            for (let index = 0; index < roommateIds.length; index += 1) {
+                const roommateId = roommateIds[index];
+                const roommateBunk = roommateBunks[index];
                 if (!roommateBunk) {
                     bunk.status = 'available';
                     bunk.occupiedByStudent = null;
@@ -2001,7 +2037,7 @@ exports.createReservation = async (req, res) => {
 };
 exports.addGroupMembers = async (req, res) => {
     try {
-        const student = req.user;
+        const student = await reconcileStudentReservationState(req.user);
         const matrics = Array.isArray(req.body.matrics)
             ? req.body.matrics
             : Array.isArray(req.body.matricNumbers)
@@ -2040,7 +2076,8 @@ exports.addGroupMembers = async (req, res) => {
                 message: 'Your assigned room could not be found',
             });
         }
-        const availableSpace = room.capacity - room.currentOccupants;
+        const roomInventory = await getRoomInventorySnapshot(room);
+        const availableSpace = roomInventory.availableSpaces;
         if (availableSpace < uniqueMatrics.length) {
             return res.status(400).json({
                 success: false,
@@ -2059,7 +2096,8 @@ exports.addGroupMembers = async (req, res) => {
                 message: `Matric number(s) not found: ${missing.join(', ')}`,
             });
         }
-        for (const member of newMembers) {
+        const reconciledMembers = await Promise.all(newMembers.map((member) => reconcileStudentReservationState(member)));
+        for (const member of reconciledMembers) {
             if (member.assignedRoom && member.assignedRoom.toString() === room._id.toString()) {
                 return res.status(400).json({
                     success: false,
@@ -2103,8 +2141,10 @@ exports.addGroupMembers = async (req, res) => {
         const invitationExpiresAt = student.reservationExpiresAt && new Date(student.reservationExpiresAt) > new Date()
             ? student.reservationExpiresAt
             : addHours(new Date(), config.RESERVATION_EXPIRY_HOURS);
-        for (const member of newMembers) {
-            const bunk = await Bunk.findOne({ room: room._id, status: 'available', isActive: true });
+        const memberBunks = roomInventory.availableBunks.slice(0, reconciledMembers.length);
+        for (let index = 0; index < reconciledMembers.length; index += 1) {
+            const member = reconciledMembers[index];
+            const bunk = memberBunks[index];
             if (!bunk) {
                 return res.status(400).json({
                     success: false,
@@ -2115,7 +2155,7 @@ exports.addGroupMembers = async (req, res) => {
             bunk.occupiedByStudent = member._id;
             bunk.reservedUntil = invitationExpiresAt;
             await bunk.save();
-            const otherNewMemberIds = newMembers
+            const otherNewMemberIds = reconciledMembers
                 .filter(m => m._id.toString() !== member._id.toString())
                 .map(m => m._id);
             member.assignedHostel = room.hostel._id;
@@ -2155,7 +2195,7 @@ exports.addGroupMembers = async (req, res) => {
             await notificationService.notifyRoommateReserved(member._id, student.reservedBy || student._id, room._id, room.hostel._id, invitationExpiresAt);
         }
         const existingIds = new Set(student.roommates.map(id => id.toString()));
-        const newRoommateIds = newMembers
+        const newRoommateIds = reconciledMembers
             .map(m => m._id)
             .filter(id => !existingIds.has(id.toString()));
         student.roommates = [...student.roommates, ...newRoommateIds];

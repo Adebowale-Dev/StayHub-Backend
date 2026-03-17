@@ -11,6 +11,7 @@ const csv = require('csv-parser');
 const fs = require('fs');
 const notificationService = require('../services/notificationService');
 const cacheService = require('../services/cacheService');
+const { syncRoomBunksToCapacity } = require('../utils/roomBunkUtils');
 const ADMIN_NOTIFICATION_LIMIT = 50;
 const ADMIN_NOTIFICATION_SAMPLE_LIMIT = 12;
 const ADMIN_NOTIFICATION_TYPES = new Set(['warning', 'info', 'error', 'success']);
@@ -849,7 +850,6 @@ async function autoGenerateRooms(hostelId, totalRooms, bedsPerRoom, floorsCount,
             level: level,
             status: 'available',
             isActive: true,
-            totalBunks: Math.floor(bedsPerRoom / 2),
             availableSpaces: bedsPerRoom
         });
     }
@@ -857,7 +857,7 @@ async function autoGenerateRooms(hostelId, totalRooms, bedsPerRoom, floorsCount,
     const createdRooms = await Room.find({ hostel: hostelId });
     const allBunks = [];
     for (const room of createdRooms) {
-        const numberOfBunks = Math.floor(room.capacity / 2);
+        const numberOfBunks = room.capacity;
         for (let i = 1; i <= numberOfBunks; i++) {
             allBunks.push({
                 bunkNumber: `B${i}`,
@@ -1100,15 +1100,7 @@ exports.createRoom = async (req, res) => {
             level,
             hostel
         });
-        const numberOfBunks = Math.floor(room.capacity / 2);
-        const bunks = [];
-        for (let i = 1; i <= numberOfBunks; i++) {
-            bunks.push({
-                bunkNumber: `B${i}`,
-                room: room._id,
-            });
-        }
-        await Bunk.insertMany(bunks);
+        await syncRoomBunksToCapacity(room);
         cacheService.del(cacheService.cacheKeys.roomsByHostel(room.hostel));
         res.status(201).json({ success: true, data: room });
     }
@@ -1155,31 +1147,15 @@ exports.updateRoom = async (req, res) => {
         }
         const oldCapacity = existingRoom.capacity;
         const newCapacity = capacity || oldCapacity;
+        if (Number(newCapacity) < Number(existingRoom.currentOccupants || 0)) {
+            return res.status(400).json({
+                success: false,
+                message: `Capacity cannot be lower than the current occupant count (${existingRoom.currentOccupants})`
+            });
+        }
         const updatedRoom = await Room.findByIdAndUpdate(req.params.id, { roomNumber, hostel, capacity: newCapacity, level, floor }, { new: true, runValidators: true }).populate('hostel');
-        if (oldCapacity !== newCapacity) {
-            const oldBunks = Math.floor(oldCapacity / 2);
-            const newBunks = Math.floor(newCapacity / 2);
-            if (newBunks > oldBunks) {
-                const bunksToAdd = [];
-                for (let i = oldBunks + 1; i <= newBunks; i++) {
-                    bunksToAdd.push({
-                        bunkNumber: `B${i}`,
-                        room: updatedRoom._id,
-                    });
-                }
-                await Bunk.insertMany(bunksToAdd);
-            }
-            else if (newBunks < oldBunks) {
-                const bunksToRemove = await Bunk.find({
-                    room: updatedRoom._id,
-                    $or: [{ upperOccupant: null }, { lowerOccupant: null }]
-                }).sort({ bunkNumber: -1 }).limit(oldBunks - newBunks);
-                for (const bunk of bunksToRemove) {
-                    if (!bunk.upperOccupant && !bunk.lowerOccupant) {
-                        await Bunk.findByIdAndDelete(bunk._id);
-                    }
-                }
-            }
+        if (Number(oldCapacity) !== Number(newCapacity)) {
+            await syncRoomBunksToCapacity(updatedRoom);
         }
         cacheService.del(cacheService.cacheKeys.roomsByHostel(updatedRoom.hostel._id));
         console.log('Room updated successfully:', updatedRoom);

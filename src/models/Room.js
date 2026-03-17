@@ -56,7 +56,7 @@ roomSchema.virtual('bunks', {
     foreignField: 'room',
 });
 roomSchema.virtual('totalBunks').get(function () {
-    return Math.floor(this.capacity / 2);
+    return this.capacity;
 });
 roomSchema.virtual('availableSpaces').get(function () {
     return this.capacity - this.currentOccupants;

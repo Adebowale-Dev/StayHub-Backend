@@ -18,11 +18,16 @@ const app = express();
 connectDB();
 app.use(helmet({
     contentSecurityPolicy: false,
+    crossOriginResourcePolicy: false,
 }));
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads'), {
+    setHeaders: (res) => {
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    },
+}));
 app.use((req, res, next) => {
     const timestamp = new Date().toISOString();
     const bodyLog = req.method !== 'GET' && req.body ?
