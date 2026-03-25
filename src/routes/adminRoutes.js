@@ -25,6 +25,7 @@ router.delete('/colleges/:collegeId/departments/:deptId', validateMongoId('colle
 router.get('/colleges/:collegeId/students', validateMongoId('collegeId'), adminController.getStudentsByCollege);
 router.get('/colleges/:collegeId/departments/:deptId/students', validateMongoId('collegeId'), validateMongoId('deptId'), adminController.getStudentsByDepartment);
 router.post('/students', validateStudent, adminController.createStudent);
+router.get('/students/import-template', adminController.downloadStudentImportTemplate);
 router.post('/students/bulk-upload', upload.single('file'), adminController.bulkUploadStudents);
 router.get('/students', adminController.getStudents);
 router.get('/students/male', adminController.getMaleStudents);
@@ -58,10 +59,14 @@ router.post('/students/:id/force-delete', async (req, res) => {
     }
 });
 router.post('/hostels', validateHostel, adminController.createHostel);
+router.get('/hostels/import-template', adminController.downloadHostelImportTemplate);
+router.post('/hostels/bulk-upload', upload.single('file'), adminController.bulkUploadHostels);
 router.get('/hostels', adminController.getHostels);
 router.put('/hostels/:id', validateMongoId('id'), adminController.updateHostel);
 router.delete('/hostels/:id', validateMongoId('id'), adminController.deleteHostel);
 router.post('/rooms', validateRoom, adminController.createRoom);
+router.get('/rooms/import-template', adminController.downloadRoomImportTemplate);
+router.post('/rooms/bulk-upload', upload.single('file'), adminController.bulkUploadRooms);
 router.get('/rooms', adminController.getRooms);
 router.put('/rooms/:id', validateMongoId('id'), validateRoom, adminController.updateRoom);
 router.delete('/rooms/:id', validateMongoId('id'), adminController.deleteRoom);

@@ -12,6 +12,18 @@ const fs = require('fs');
 const notificationService = require('../services/notificationService');
 const cacheService = require('../services/cacheService');
 const { syncRoomBunksToCapacity } = require('../utils/roomBunkUtils');
+const {
+    buildStudentImportTemplateCsv,
+    formatStudentImportError,
+    parseStudentImportRow,
+} = require('../utils/studentCsvUtils');
+const {
+    buildHostelImportTemplateCsv,
+    buildRoomImportTemplateCsv,
+    parseHostelImportRow,
+    parseRoomImportRow,
+    parseImportError,
+} = require('../utils/housingCsvUtils');
 const ADMIN_NOTIFICATION_LIMIT = 50;
 const ADMIN_NOTIFICATION_SAMPLE_LIMIT = 12;
 const ADMIN_NOTIFICATION_TYPES = new Set(['warning', 'info', 'error', 'success']);
@@ -473,44 +485,101 @@ exports.createStudent = async (req, res) => {
         res.status(400).json({ success: false, message: error.message });
     }
 };
-exports.bulkUploadStudents = async (req, res) => {
+exports.downloadStudentImportTemplate = async (req, res) => {
     try {
-        const students = [];
-        const errors = [];
-        fs.createReadStream(req.file.path)
-            .pipe(csv())
-            .on('data', (row) => {
-            students.push({
-                firstName: row.firstName,
-                lastName: row.lastName,
-                matricNo: row.matricNo,
-                email: row.email,
-                level: parseInt(row.level),
-                gender: row.gender ? row.gender.toLowerCase() : 'male',
-                college: row.college,
-                department: row.department,
-                password: generateDefaultPassword(row.firstName),
+        const csvContent = buildStudentImportTemplateCsv();
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="student_import_template.csv"');
+        res.status(200).send(csvContent);
+    }
+    catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to generate student import template',
+        });
+    }
+};
+exports.bulkUploadStudents = async (req, res) => {
+    if (!req.file?.path) {
+        return res.status(400).json({
+            success: false,
+            message: 'A CSV file is required',
+        });
+    }
+
+    try {
+        const rows = await new Promise((resolve, reject) => {
+            const parsedRows = [];
+
+            fs.createReadStream(req.file.path)
+                .pipe(csv())
+                .on('data', (row) => {
+                parsedRows.push(row);
+            })
+                .on('end', () => resolve(parsedRows))
+                .on('error', reject);
+        });
+
+        if (rows.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'The uploaded CSV file is empty',
             });
-        })
-            .on('end', async () => {
-            for (const studentData of students) {
+        }
+
+        const errors = [];
+        let createdCount = 0;
+
+        for (const [index, row] of rows.entries()) {
+            const rowNumber = index + 2;
+
+            try {
+                const studentData = await parseStudentImportRow(row);
                 try {
                     await Student.create(studentData);
+                    createdCount += 1;
                 }
                 catch (error) {
-                    errors.push({ student: studentData.matricNo, error: error.message });
+                    errors.push({
+                        row: rowNumber,
+                        matricNo: studentData.matricNo,
+                        error: formatStudentImportError(error),
+                        rowData: row,
+                    });
                 }
             }
-            fs.unlinkSync(req.file.path);
-            res.status(201).json({
-                success: true,
-                message: `${students.length - errors.length} students uploaded successfully`,
+            catch (error) {
+                errors.push({
+                    row: rowNumber,
+                    matricNo: String(row?.matricNo || '').trim() || `Row ${rowNumber}`,
+                    error: formatStudentImportError(error),
+                    rowData: row,
+                });
+            }
+        }
+
+        const failedCount = errors.length;
+        const totalRows = rows.length;
+        const message = failedCount === 0
+            ? `${createdCount} students imported successfully`
+            : `Imported ${createdCount} students with ${failedCount} row issue(s)`;
+
+        res.status(failedCount === 0 ? 201 : 200).json({
+            success: failedCount === 0,
+            message,
+            data: {
+                totalRows,
+                createdCount,
+                failedCount,
                 errors: errors.length > 0 ? errors : undefined,
-            });
+            },
         });
     }
     catch (error) {
         res.status(400).json({ success: false, message: error.message });
+    }
+    finally {
+        await fs.promises.unlink(req.file.path).catch(() => undefined);
     }
 };
 exports.getStudents = async (req, res) => {
@@ -947,9 +1016,110 @@ exports.createHostel = async (req, res) => {
         });
     }
 };
+exports.downloadHostelImportTemplate = async (req, res) => {
+    try {
+        const csvContent = buildHostelImportTemplateCsv();
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="hostel_import_template.csv"');
+        res.status(200).send(csvContent);
+    }
+    catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to generate hostel import template',
+        });
+    }
+};
+exports.bulkUploadHostels = async (req, res) => {
+    if (!req.file?.path) {
+        return res.status(400).json({
+            success: false,
+            message: 'A CSV file is required',
+        });
+    }
+    try {
+        const rows = await new Promise((resolve, reject) => {
+            const parsedRows = [];
+            fs.createReadStream(req.file.path)
+                .pipe(csv())
+                .on('data', (row) => {
+                parsedRows.push(row);
+            })
+                .on('end', () => resolve(parsedRows))
+                .on('error', reject);
+        });
+        if (rows.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'The uploaded CSV file is empty',
+            });
+        }
+        const errors = [];
+        let createdCount = 0;
+        for (const [index, row] of rows.entries()) {
+            const rowNumber = index + 2;
+            try {
+                const hostelData = await parseHostelImportRow(row);
+                try {
+                    const hostel = await Hostel.create(hostelData);
+                    cacheService.del(cacheService.cacheKeys.hostelsByLevel(hostel.level));
+                    if (hostelData.autoCreateRooms && hostelData.totalRooms > 0 && hostelData.bedsPerRoom > 0 && hostelData.floorsCount > 0) {
+                        await autoGenerateRooms(hostel._id, Number(hostelData.totalRooms), Number(hostelData.bedsPerRoom), Number(hostelData.floorsCount), Number(hostelData.level));
+                    }
+                    createdCount += 1;
+                }
+                catch (error) {
+                    errors.push({
+                        row: rowNumber,
+                        name: hostelData.name,
+                        error: parseImportError(error, { name: 'Hostel name already exists' }),
+                        rowData: row,
+                    });
+                }
+            }
+            catch (error) {
+                errors.push({
+                    row: rowNumber,
+                    name: String(row?.name || '').trim() || `Row ${rowNumber}`,
+                    error: parseImportError(error),
+                    rowData: row,
+                });
+            }
+        }
+        const failedCount = errors.length;
+        const totalRows = rows.length;
+        const message = failedCount === 0
+            ? `${createdCount} hostels imported successfully`
+            : `Imported ${createdCount} hostels with ${failedCount} row issue(s)`;
+        res.status(failedCount === 0 ? 201 : 200).json({
+            success: failedCount === 0,
+            message,
+            data: {
+                totalRows,
+                createdCount,
+                failedCount,
+                errors: errors.length > 0 ? errors : undefined,
+            },
+        });
+    }
+    catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+    finally {
+        await fs.promises.unlink(req.file.path).catch(() => undefined);
+    }
+};
 exports.getHostels = async (req, res) => {
     try {
-        const hostels = await Hostel.find({ isActive: true }).populate('portersAssigned').lean();
+        const { status } = req.query;
+        const query = {};
+        if (status === 'active') {
+            query.isActive = true;
+        }
+        else if (status === 'inactive') {
+            query.isActive = false;
+        }
+        const hostels = await Hostel.find(query).populate('portersAssigned').lean();
         const hostelsWithStats = await Promise.all(hostels.map(async (hostel) => {
             const rooms = await Room.find({ hostel: hostel._id });
             const totalCapacity = rooms.reduce((sum, room) => sum + room.capacity, 0);
@@ -1108,14 +1278,109 @@ exports.createRoom = async (req, res) => {
         res.status(400).json({ success: false, message: error.message });
     }
 };
+exports.downloadRoomImportTemplate = async (req, res) => {
+    try {
+        const csvContent = buildRoomImportTemplateCsv();
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="room_import_template.csv"');
+        res.status(200).send(csvContent);
+    }
+    catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to generate room import template',
+        });
+    }
+};
+exports.bulkUploadRooms = async (req, res) => {
+    if (!req.file?.path) {
+        return res.status(400).json({
+            success: false,
+            message: 'A CSV file is required',
+        });
+    }
+    try {
+        const rows = await new Promise((resolve, reject) => {
+            const parsedRows = [];
+            fs.createReadStream(req.file.path)
+                .pipe(csv())
+                .on('data', (row) => {
+                parsedRows.push(row);
+            })
+                .on('end', () => resolve(parsedRows))
+                .on('error', reject);
+        });
+        if (rows.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'The uploaded CSV file is empty',
+            });
+        }
+        const errors = [];
+        let createdCount = 0;
+        for (const [index, row] of rows.entries()) {
+            const rowNumber = index + 2;
+            try {
+                const roomData = await parseRoomImportRow(row);
+                try {
+                    const room = await Room.create(roomData);
+                    await syncRoomBunksToCapacity(room);
+                    cacheService.del(cacheService.cacheKeys.roomsByHostel(room.hostel));
+                    createdCount += 1;
+                }
+                catch (error) {
+                    errors.push({
+                        row: rowNumber,
+                        roomNumber: roomData.roomNumber,
+                        error: parseImportError(error, { roomNumber: 'Room number already exists in the selected hostel' }),
+                        rowData: row,
+                    });
+                }
+            }
+            catch (error) {
+                errors.push({
+                    row: rowNumber,
+                    roomNumber: String(row?.roomNumber || '').trim() || `Row ${rowNumber}`,
+                    error: parseImportError(error),
+                    rowData: row,
+                });
+            }
+        }
+        const failedCount = errors.length;
+        const totalRows = rows.length;
+        const message = failedCount === 0
+            ? `${createdCount} rooms imported successfully`
+            : `Imported ${createdCount} rooms with ${failedCount} row issue(s)`;
+        res.status(failedCount === 0 ? 201 : 200).json({
+            success: failedCount === 0,
+            message,
+            data: {
+                totalRows,
+                createdCount,
+                failedCount,
+                errors: errors.length > 0 ? errors : undefined,
+            },
+        });
+    }
+    catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+    finally {
+        await fs.promises.unlink(req.file.path).catch(() => undefined);
+    }
+};
 exports.getRooms = async (req, res) => {
     try {
-        const { hostel, status } = req.query;
-        const query = { isActive: true };
+        const { hostel, status, isActive } = req.query;
+        const query = {};
         if (hostel)
             query.hostel = hostel;
         if (status)
             query.status = status;
+        if (isActive === 'true')
+            query.isActive = true;
+        if (isActive === 'false')
+            query.isActive = false;
         const rooms = await Room.find(query).populate('hostel');
         res.status(200).json({ success: true, data: rooms });
     }

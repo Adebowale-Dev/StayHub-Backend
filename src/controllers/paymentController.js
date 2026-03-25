@@ -7,6 +7,9 @@ const cacheService = require('../services/cacheService');
 const config = require('../config/env');
 const { generateReference, generatePaymentCode } = require('../utils/generateCode');
 const { getCurrentAcademicYear, getCurrentSemester } = require('../utils/dateUtils');
+
+const getPaymentErrorStatus = (error) => error?.statusCode || 500;
+
 const initializePayment = async (req, res) => {
     try {
         const student = req.user;
@@ -81,7 +84,7 @@ const initializePayment = async (req, res) => {
     }
     catch (error) {
         console.error('Initialize payment error:', error);
-        res.status(500).json({
+        res.status(getPaymentErrorStatus(error)).json({
             success: false,
             message: error.message || 'Failed to initialize payment',
         });
@@ -165,7 +168,7 @@ const verifyPayment = async (req, res) => {
     }
     catch (error) {
         console.error('Verify payment error:', error);
-        res.status(500).json({
+        res.status(getPaymentErrorStatus(error)).json({
             success: false,
             message: error.message || 'Failed to verify payment',
         });
