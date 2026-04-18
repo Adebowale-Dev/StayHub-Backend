@@ -496,13 +496,59 @@ const buildMatricNo = (departmentCode) => {
     return `BU${STUDENT_MATRIC_YEAR}${departmentCode}1001`;
 };
 
+const maskMongoUri = (uri) => uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@');
+
+const shouldRetryWithFallbackUri = (error) => {
+    const message = String(error?.message || '').toLowerCase();
+    const code = String(error?.code || '').toLowerCase();
+    return message.includes('querysrv') || message.includes('enotfound') || code === 'econnrefused' || code === 'enotfound';
+};
+
+const getMongoUriCandidates = () => {
+    const candidates = [];
+    if (process.env.MONGODB_URI) {
+        candidates.push({ label: 'MONGODB_URI', uri: process.env.MONGODB_URI });
+    }
+    if (process.env.MONGODB_URI_DIRECT) {
+        candidates.push({ label: 'MONGODB_URI_DIRECT', uri: process.env.MONGODB_URI_DIRECT });
+    }
+    return candidates;
+};
+
 async function connectDatabase() {
-    if (!process.env.MONGODB_URI) {
+    const candidates = getMongoUriCandidates();
+    if (candidates.length === 0) {
         throw new Error('MONGODB_URI is required to run seed');
     }
 
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log('1/7 Connected to MongoDB');
+    let lastError;
+    for (let index = 0; index < candidates.length; index += 1) {
+        const candidate = candidates[index];
+        try {
+            if (index > 0) {
+                console.log(`   Retrying DB connection with ${candidate.label}...`);
+            }
+            console.log(`   Trying ${candidate.label}: ${maskMongoUri(candidate.uri)}`);
+            await mongoose.connect(candidate.uri, {
+                serverSelectionTimeoutMS: 10000,
+                connectTimeoutMS: 10000,
+                family: 4,
+            });
+            console.log(`1/7 Connected to MongoDB via ${candidate.label}`);
+            return;
+        }
+        catch (error) {
+            lastError = error;
+            const canFallback = index < candidates.length - 1 && shouldRetryWithFallbackUri(error);
+            if (canFallback) {
+                console.warn(`   ${candidate.label} failed (${error.code || 'unknown'}). Trying fallback URI...`);
+                continue;
+            }
+            throw error;
+        }
+    }
+
+    throw lastError;
 }
 
 async function destructiveReset() {

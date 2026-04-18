@@ -1,22 +1,69 @@
 const mongoose = require('mongoose');
+
+const maskMongoUri = (uri) => uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@');
+
+const shouldRetryWithFallbackUri = (error) => {
+    const message = String(error?.message || '').toLowerCase();
+    const code = String(error?.code || '').toLowerCase();
+    return message.includes('querysrv') || message.includes('enotfound') || code === 'econnrefused' || code === 'enotfound';
+};
+
+const getMongoUriCandidates = () => {
+    const candidates = [];
+    if (process.env.MONGODB_URI) {
+        candidates.push({ label: 'MONGODB_URI', uri: process.env.MONGODB_URI });
+    }
+    if (process.env.MONGODB_URI_DIRECT) {
+        candidates.push({ label: 'MONGODB_URI_DIRECT', uri: process.env.MONGODB_URI_DIRECT });
+    }
+    return candidates;
+};
+
 const connectDB = async () => {
     try {
-        if (!process.env.MONGODB_URI) {
+        const candidates = getMongoUriCandidates();
+        if (candidates.length === 0) {
             throw new Error('MONGODB_URI is not defined in environment variables');
         }
         console.log('Attempting to connect to MongoDB...');
-        console.log('Connection string:', process.env.MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@'));
-        const conn = await mongoose.connect(process.env.MONGODB_URI, {
-            maxPoolSize: 10,
-            minPoolSize: 2,
-            socketTimeoutMS: 45000,
-            serverSelectionTimeoutMS: 10000,
-            connectTimeoutMS: 10000,
-            w: 'majority',
-            wtimeoutMS: 30000,
-            autoIndex: process.env.NODE_ENV !== 'production',
-            family: 4,
-        });
+        let conn;
+        let lastError;
+
+        for (let index = 0; index < candidates.length; index += 1) {
+            const candidate = candidates[index];
+            try {
+                if (index > 0) {
+                    console.log(`Retrying DB connection with ${candidate.label}...`);
+                }
+                console.log('Connection string:', maskMongoUri(candidate.uri));
+                conn = await mongoose.connect(candidate.uri, {
+                    maxPoolSize: 10,
+                    minPoolSize: 2,
+                    socketTimeoutMS: 45000,
+                    serverSelectionTimeoutMS: 10000,
+                    connectTimeoutMS: 10000,
+                    w: 'majority',
+                    wtimeoutMS: 30000,
+                    autoIndex: process.env.NODE_ENV !== 'production',
+                    family: 4,
+                });
+                break;
+            }
+            catch (error) {
+                lastError = error;
+                const canFallback = index < candidates.length - 1 && shouldRetryWithFallbackUri(error);
+                if (canFallback) {
+                    console.warn(`${candidate.label} failed (${error.code || 'unknown'}). Trying fallback URI...`);
+                    continue;
+                }
+                throw error;
+            }
+        }
+
+        if (!conn && lastError) {
+            throw lastError;
+        }
+
         console.log(`✓ MongoDB Connected: ${conn.connection.host}`);
         console.log(`✓ Database: ${conn.connection.name}`);
         mongoose.connection.on('error', (err) => {
