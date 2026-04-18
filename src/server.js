@@ -14,13 +14,23 @@ const adminRoutes = require('./routes/adminRoutes');
 const studentRoutes = require('./routes/studentRoutes');
 const porterRoutes = require('./routes/porterRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
+
+const corsOptions = {
+    origin: true,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
+    optionsSuccessStatus: 204,
+};
+
 const app = express();
 connectDB();
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginResourcePolicy: false,
 }));
-app.use(cors());
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads'), {
