@@ -2,10 +2,12 @@ const mongoose = require('mongoose');
 
 const maskMongoUri = (uri) => uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@');
 
+const isLocalMongoUri = (uri = '') => /mongodb(\+srv)?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/i.test(uri);
+
 const shouldRetryWithFallbackUri = (error) => {
     const message = String(error?.message || '').toLowerCase();
     const code = String(error?.code || '').toLowerCase();
-    return message.includes('querysrv') || message.includes('enotfound') || code === 'econnrefused' || code === 'enotfound';
+    return message.includes('querysrv') || message.includes('enotfound') || code === 'econnrefused' || code === 'enotfound' || code === 'invalid_mongodb_uri';
 };
 
 const getMongoUriCandidates = () => {
@@ -26,6 +28,7 @@ const connectDB = async () => {
             throw new Error('MONGODB_URI is not defined in environment variables');
         }
         console.log('Attempting to connect to MongoDB...');
+        console.log(`MongoDB URI candidates detected: ${candidates.map((item) => item.label).join(', ')}`);
         let conn;
         let lastError;
 
@@ -35,6 +38,13 @@ const connectDB = async () => {
                 if (index > 0) {
                     console.log(`Retrying DB connection with ${candidate.label}...`);
                 }
+
+                if (process.env.NODE_ENV === 'production' && isLocalMongoUri(candidate.uri)) {
+                    const uriError = new Error(`${candidate.label} is set to localhost/127.0.0.1 in production`);
+                    uriError.code = 'INVALID_MONGODB_URI';
+                    throw uriError;
+                }
+
                 console.log('Connection string:', maskMongoUri(candidate.uri));
                 conn = await mongoose.connect(candidate.uri, {
                     maxPoolSize: 10,
@@ -91,6 +101,11 @@ const connectDB = async () => {
             console.error('- Verify your connection string is correct');
             console.error('- Check your internet connection');
             console.error('- Try using the standard connection string (without +srv) from MongoDB Atlas');
+        }
+        if (String(error?.code || '').toLowerCase() === 'invalid_mongodb_uri') {
+            console.error('\nProduction MongoDB URI is invalid for cloud deployment.');
+            console.error('Set Render environment variable MONGODB_URI (or MONGODB_URI_DIRECT) to your Atlas URI.');
+            console.error('Do not use localhost or 127.0.0.1 on Render.');
         }
         process.exit(1);
     }

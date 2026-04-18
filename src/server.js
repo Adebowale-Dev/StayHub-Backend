@@ -24,7 +24,6 @@ const corsOptions = {
 };
 
 const app = express();
-connectDB();
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginResourcePolicy: false,
@@ -129,8 +128,13 @@ app.use((err, req, res, next) => {
     });
 });
 const PORT = config.PORT || 5000;
-const server = app.listen(PORT, () => {
-    console.log(`
+let server;
+
+const startServer = async () => {
+    await connectDB();
+
+    server = app.listen(PORT, () => {
+        console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
 ║   StayHub - Smart Hostel Management System                ║
@@ -142,11 +146,22 @@ const server = app.listen(PORT, () => {
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
-    startReservationCleanupJob();
+        startReservationCleanupJob();
+    });
+};
+
+startServer().catch((err) => {
+    console.error('Fatal startup error:', err);
+    process.exit(1);
 });
+
 process.on('unhandledRejection', (err) => {
     console.error('Unhandled Promise Rejection:', err);
-    server.close(() => process.exit(1));
+    if (server) {
+        server.close(() => process.exit(1));
+        return;
+    }
+    process.exit(1);
 });
 process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err);
