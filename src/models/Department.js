@@ -26,7 +26,7 @@ const departmentSchema = new mongoose.Schema({
     },
     availableLevels: [{
             type: Number,
-            enum: [100, 200, 300, 400, 500],
+            enum: [100, 200, 300, 400, 500, 600],
         }],
     college: {
         type: mongoose.Schema.Types.ObjectId,

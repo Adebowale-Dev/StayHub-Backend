@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const Hostel = require('../models/Hostel');
 const Room = require('../models/Room');
 
-const ALLOWED_LEVELS = new Set([100, 200, 300, 400, 500]);
+const ALLOWED_LEVELS = new Set([100, 200, 300, 400, 500, 600]);
 const ALLOWED_HOSTEL_GENDERS = new Set(['male', 'female', 'mixed']);
 const TRUE_VALUES = new Set(['true', '1', 'yes', 'y']);
 const FALSE_VALUES = new Set(['false', '0', 'no', 'n']);
@@ -120,7 +120,7 @@ const parseHostelImportRow = async (row) => {
     }
 
     if (!ALLOWED_LEVELS.has(level)) {
-        throw new Error('Level must be one of 100, 200, 300, 400, or 500');
+        throw new Error('Level must be one of 100, 200, 300, 400, 500, or 600');
     }
 
     if (!ALLOWED_HOSTEL_GENDERS.has(gender)) {
@@ -204,7 +204,7 @@ const parseRoomImportRow = async (row) => {
     }
 
     if (!ALLOWED_LEVELS.has(level)) {
-        throw new Error('Level must be one of 100, 200, 300, 400, or 500');
+        throw new Error('Level must be one of 100, 200, 300, 400, 500, or 600');
     }
 
     if (rawFloor && (!Number.isInteger(floor) || floor < 0)) {

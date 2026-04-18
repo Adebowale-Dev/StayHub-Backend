@@ -1,4 +1,7 @@
 const { body, param, query, validationResult } = require('express-validator');
+
+const ALLOWED_LEVELS = [100, 200, 300, 400, 500, 600];
+
 const handleValidationErrors = (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -41,8 +44,8 @@ const validateStudent = [
         .withMessage('Valid email is required')
         .normalizeEmail(),
     body('level')
-        .isIn([100, 200, 300, 400, 500])
-        .withMessage('Level must be 100, 200, 300, 400, or 500'),
+        .isIn(ALLOWED_LEVELS)
+        .withMessage('Level must be 100, 200, 300, 400, 500, or 600'),
     body('gender')
         .notEmpty()
         .withMessage('Gender is required')
@@ -96,7 +99,17 @@ const validateDepartment = [
     body('availableLevels')
         .optional()
         .isArray()
-        .withMessage('Available levels must be an array'),
+        .withMessage('Available levels must be an array')
+        .custom((levels) => {
+        if (!Array.isArray(levels)) {
+            return true;
+        }
+        const hasInvalidLevel = levels.some((level) => !ALLOWED_LEVELS.includes(Number(level)));
+        if (hasInvalidLevel) {
+            throw new Error('Available levels must only include 100, 200, 300, 400, 500, or 600');
+        }
+        return true;
+    }),
     body('hodEmail')
         .optional()
         .isEmail()
@@ -110,8 +123,8 @@ const validateHostel = [
         .withMessage('Hostel name is required')
         .trim(),
     body('level')
-        .isIn([100, 200, 300, 400, 500])
-        .withMessage('Level must be 100, 200, 300, 400, or 500'),
+        .isIn(ALLOWED_LEVELS)
+        .withMessage('Level must be 100, 200, 300, 400, 500, or 600'),
     body('gender')
         .notEmpty()
         .withMessage('Gender is required')
@@ -132,8 +145,8 @@ const validateRoom = [
         .isInt({ min: 2 })
         .withMessage('Capacity must be at least 2'),
     body('level')
-        .isIn([100, 200, 300, 400, 500])
-        .withMessage('Level must be 100, 200, 300, 400, or 500'),
+        .isIn(ALLOWED_LEVELS)
+        .withMessage('Level must be 100, 200, 300, 400, 500, or 600'),
     body('hostel')
         .notEmpty()
         .withMessage('Hostel is required')

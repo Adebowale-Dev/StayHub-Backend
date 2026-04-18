@@ -315,7 +315,7 @@ const getAllPayments = async (req, res) => {
             query.academicYear = academicYear;
         const payments = await Payment.find(query)
             .populate('student', 'firstName lastName matricNo email level')
-            .sort({ createdAt: -1 })
+            .sort({ updatedAt: -1, createdAt: -1 })
             .limit(limit * 1)
             .skip((page - 1) * limit)
             .lean();

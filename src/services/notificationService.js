@@ -93,6 +93,8 @@ const sendExpoPushMessages = async (messages) => {
 const deliverStudentNotification = async ({ student, preferenceKey, pushPayload, emailHandler, forceEmail = false, emailOnPushFailure = true, }) => {
     const preferences = normalizeStudentNotificationPreferences(student?.notificationPreferences);
     let pushResult = { success: false, deliveredCount: 0, tickets: [] };
+    let emailSent = false;
+    let emailError = null;
     const pushAttempted = Boolean(pushPayload && canSendPushForPreference(student, preferenceKey));
     if (pushPayload && canSendPushForPreference(student, preferenceKey)) {
         pushResult = await sendExpoPushMessages(buildExpoPushMessages(student, pushPayload));
@@ -100,12 +102,24 @@ const deliverStudentNotification = async ({ student, preferenceKey, pushPayload,
     const shouldSendEmail = typeof emailHandler === 'function' &&
         (forceEmail || preferences.emailEscalationEnabled || (emailOnPushFailure && !pushResult.success));
     if (shouldSendEmail) {
-        await emailHandler();
+        try {
+            await emailHandler();
+            emailSent = true;
+        }
+        catch (error) {
+            emailError = {
+                message: error?.message || 'Email delivery failed',
+                code: error?.code || null,
+                statusCode: error?.statusCode || null,
+            };
+            console.error('Notification email delivery failed:', emailError.message);
+        }
     }
     return {
         pushAttempted,
         pushDelivered: pushResult.success,
-        emailSent: shouldSendEmail,
+        emailSent,
+        emailError,
         pushResult,
     };
 };

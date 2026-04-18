@@ -909,12 +909,12 @@ exports.updateProfile = async (req, res) => {
             studentUpdate.department = updateData.department;
         }
         if (updateData.level !== undefined) {
-            const validLevels = [100, 200, 300, 400, 500];
+            const validLevels = [100, 200, 300, 400, 500, 600];
             const levelNum = parseInt(updateData.level);
             if (!validLevels.includes(levelNum)) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Level must be one of: 100, 200, 300, 400, 500'
+                    message: 'Level must be one of: 100, 200, 300, 400, 500, 600'
                 });
             }
             studentUpdate.level = levelNum;
@@ -1371,8 +1371,8 @@ exports.reserveRoom = async (req, res) => {
                         bunk: roommateBunk,
                         notes: 'Group room invitation created',
                     }),
+                    notificationService.notifyRoommateReserved(roommateId, student._id, room._id, room.hostel._id, bunk.reservedUntil),
                 ]);
-                await notificationService.notifyRoommateReserved(roommateId, student._id, room._id, room.hostel._id, bunk.reservedUntil);
                 console.log(`✅ Reserved bunk ${roommateBunk.bunkNumber} for ${roommateStudent.firstName} ${roommateStudent.lastName}`);
             }
         }
@@ -1387,8 +1387,8 @@ exports.reserveRoom = async (req, res) => {
                         hostel: room.hostel,
                         notes: 'Roommate invitation created from legacy reservation flow',
                     }),
+                    notificationService.notifyRoommateReserved(roommateId, student._id, room._id, room.hostel._id, bunk.reservedUntil),
                 ]);
-                await notificationService.notifyRoommateReserved(roommateId, student._id, room._id, room.hostel._id, bunk.reservedUntil);
             }
         }
         await student.save();
@@ -1984,8 +1984,8 @@ exports.createReservation = async (req, res) => {
                         bunk: roommateBunk,
                         notes: 'Group room invitation created',
                     }),
+                    notificationService.notifyRoommateReserved(roommateId, student._id, room._id, room.hostel._id, bunk.reservedUntil),
                 ]);
-                await notificationService.notifyRoommateReserved(roommateId, student._id, room._id, room.hostel._id, bunk.reservedUntil);
                 console.log(`✅ Reserved bunk ${roommateBunk.bunkNumber} for ${roommateStudent.firstName}`);
             }
         }
@@ -2077,13 +2077,6 @@ exports.addGroupMembers = async (req, res) => {
             });
         }
         const roomInventory = await getRoomInventorySnapshot(room);
-        const availableSpace = roomInventory.availableSpaces;
-        if (availableSpace < uniqueMatrics.length) {
-            return res.status(400).json({
-                success: false,
-                message: `Insufficient space. Room has ${availableSpace} available space(s), but ${uniqueMatrics.length} needed.`,
-            });
-        }
         const newMembers = await Student.find({
             matricNo: { $in: uniqueMatrics },
             isActive: true,
@@ -2097,8 +2090,17 @@ exports.addGroupMembers = async (req, res) => {
             });
         }
         const reconciledMembers = await Promise.all(newMembers.map((member) => reconcileStudentReservationState(member)));
+        const inviterId = student.reservedBy || student._id;
+        const membersToInvite = [];
+        const alreadyAssignedMembers = [];
         for (const member of reconciledMembers) {
             if (member.assignedRoom && member.assignedRoom.toString() === room._id.toString()) {
+                const memberReservedById = member.reservedBy?._id || member.reservedBy;
+                const hasSameInviter = memberReservedById && String(memberReservedById) === String(inviterId);
+                if (hasSameInviter && ACTIVE_RESERVATION_STATUSES.includes(member.reservationStatus)) {
+                    alreadyAssignedMembers.push(member);
+                    continue;
+                }
                 return res.status(400).json({
                     success: false,
                     message: `${member.firstName} ${member.lastName} (${member.matricNo}) is already in this room`,
@@ -2115,35 +2117,42 @@ exports.addGroupMembers = async (req, res) => {
                     message: invitationValidation.message,
                 });
             }
+            membersToInvite.push(member);
         }
-        const recentInvitationAlerts = (student.invitationHistory || [])
-            .slice(-6)
-            .reverse()
-            .map((entry) => normalizeInvitationHistoryEntry(entry))
-            .filter(Boolean)
-            .filter((entry, index, entries) => entries.findIndex((candidate) => candidate.action === entry.action &&
-            candidate.role === entry.role &&
-            String(candidate.relatedStudent?._id || candidate.relatedStudent || '') ===
-                String(entry.relatedStudent?._id || entry.relatedStudent || '') &&
-            candidate.roomNumber === entry.roomNumber &&
-            candidate.hostelName === entry.hostelName) === index)
-            .filter((entry) => !(student.reservationStatus === 'temporary' && entry.action === 'invited' && entry.role === 'invitee'))
-            .map((entry) => buildInvitationAlert(entry, student.reservationExpiresAt))
-            .filter(Boolean);
-        recentInvitationAlerts.forEach((alert) => {
-            alerts.push({
-                _id: String(id++),
-                ...alert,
+        const availableSpace = roomInventory.availableSpaces;
+        if (availableSpace < membersToInvite.length) {
+            return res.status(400).json({
+                success: false,
+                message: `Insufficient space. Room has ${availableSpace} available space(s), but ${membersToInvite.length} needed.`,
             });
-        });
+        }
         const groupMembers = [];
+        if (alreadyAssignedMembers.length > 0) {
+            const existingBunkIds = alreadyAssignedMembers
+                .map((member) => member.assignedBunk)
+                .filter(Boolean);
+            const existingBunks = existingBunkIds.length > 0
+                ? await Bunk.find({ _id: { $in: existingBunkIds } }, 'bunkNumber')
+                : [];
+            const existingBunkMap = new Map(existingBunks.map((bunk) => [String(bunk._id), bunk.bunkNumber]));
+            alreadyAssignedMembers.forEach((member) => {
+                groupMembers.push({
+                    id: member._id,
+                    matricNo: member.matricNo,
+                    matricNumber: member.matricNo,
+                    name: `${member.firstName} ${member.lastName}`,
+                    bunk: member.assignedBunk ? (existingBunkMap.get(String(member.assignedBunk)) || null) : null,
+                    status: member.reservationStatus,
+                });
+            });
+        }
         const existingRoommateIds = (student.roommates || []).map((id) => id.toString());
         const invitationExpiresAt = student.reservationExpiresAt && new Date(student.reservationExpiresAt) > new Date()
             ? student.reservationExpiresAt
             : addHours(new Date(), config.RESERVATION_EXPIRY_HOURS);
-        const memberBunks = roomInventory.availableBunks.slice(0, reconciledMembers.length);
-        for (let index = 0; index < reconciledMembers.length; index += 1) {
-            const member = reconciledMembers[index];
+        const memberBunks = roomInventory.availableBunks.slice(0, membersToInvite.length);
+        for (let index = 0; index < membersToInvite.length; index += 1) {
+            const member = membersToInvite[index];
             const bunk = memberBunks[index];
             if (!bunk) {
                 return res.status(400).json({
@@ -2169,7 +2178,7 @@ exports.addGroupMembers = async (req, res) => {
                 ...existingRoommateIds,
                 ...otherNewMemberIds.map((id) => id.toString()),
             ].filter((id, index, array) => array.indexOf(id) === index && id !== member._id.toString());
-            member.reservedBy = student.reservedBy || student._id;
+            member.reservedBy = inviterId;
             member.invitationReminderMarks = [];
             await member.save();
             room.currentOccupants += 1;
@@ -2185,27 +2194,35 @@ exports.addGroupMembers = async (req, res) => {
             await Promise.allSettled([
                 invitationAuditService.logInvitationCreated({
                     invitee: member,
-                    inviter: student.reservedBy || student._id,
+                    inviter: inviterId,
                     room,
                     hostel: room.hostel,
                     bunk,
                     notes: 'Room invitation added to an existing reservation',
                 }),
+                notificationService.notifyRoommateReserved(member._id, inviterId, room._id, room.hostel._id, invitationExpiresAt),
             ]);
-            await notificationService.notifyRoommateReserved(member._id, student.reservedBy || student._id, room._id, room.hostel._id, invitationExpiresAt);
         }
-        const existingIds = new Set(student.roommates.map(id => id.toString()));
+        const currentRoommates = Array.isArray(student.roommates) ? student.roommates : [];
+        const existingIds = new Set(currentRoommates.map(id => id.toString()));
         const newRoommateIds = reconciledMembers
             .map(m => m._id)
             .filter(id => !existingIds.has(id.toString()));
-        student.roommates = [...student.roommates, ...newRoommateIds];
+        student.roommates = [...currentRoommates, ...newRoommateIds];
         await student.save();
         await Student.updateMany({ _id: { $in: existingRoommateIds } }, { $addToSet: { roommates: { $each: newRoommateIds } } });
         await room.updateStatus();
         cacheService.del(cacheService.cacheKeys.availableRooms(student.level));
+        const newlyAddedCount = membersToInvite.length;
+        const alreadyLinkedCount = alreadyAssignedMembers.length;
+        const message = newlyAddedCount === 0 && alreadyLinkedCount > 0
+            ? `${alreadyLinkedCount} friend(s) were already linked to this room and have now been synced.`
+            : alreadyLinkedCount > 0
+                ? `${newlyAddedCount} invitation(s) sent by email and StayHub notifications. ${alreadyLinkedCount} friend(s) were already linked to this room.`
+                : `${groupMembers.length} invitation(s) sent by email and StayHub notifications. Each friend has ${config.RESERVATION_EXPIRY_HOURS} hours to approve.`;
         res.status(200).json({
             success: true,
-            message: `${groupMembers.length} invitation(s) sent by email and StayHub notifications. Each friend has ${config.RESERVATION_EXPIRY_HOURS} hours to approve.`,
+            message,
             data: {
                 groupMembers,
                 totalInRoom: room.currentOccupants,
@@ -2217,6 +2234,141 @@ exports.addGroupMembers = async (req, res) => {
         res.status(500).json({
             success: false,
             message: error.message || 'Server error while adding group members',
+        });
+    }
+};
+exports.removeGroupMember = async (req, res) => {
+    try {
+        const student = await Student.findById(req.user._id)
+            .populate('assignedHostel assignedBunk reservedBy')
+            .populate({
+            path: 'assignedRoom',
+            select: 'roomNumber floor capacity currentOccupants status hostel',
+        })
+            .populate({
+            path: 'roommates',
+            select: 'firstName lastName matricNo reservationStatus assignedRoom reservedBy',
+        });
+        if (!student || !student.assignedRoom || (student.reservationStatus !== 'confirmed' && student.reservationStatus !== 'checked_in')) {
+            return res.status(400).json({
+                success: false,
+                message: 'You must have an active reservation before removing a friend',
+            });
+        }
+        const inviterId = student.reservedBy?._id || student.reservedBy || student._id;
+        if (String(inviterId) !== String(student._id)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Only the reservation owner can remove pending friends from this room',
+            });
+        }
+        const memberId = String(req.params.memberId || req.body.memberId || '').trim();
+        if (!memberId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Friend ID is required',
+            });
+        }
+        const currentRoommateIds = Array.isArray(student.roommates)
+            ? student.roommates.map((roommate) => String(roommate?._id || roommate)).filter(Boolean)
+            : [];
+        if (!currentRoommateIds.includes(memberId)) {
+            return res.status(404).json({
+                success: false,
+                message: 'Friend is not part of this room reservation',
+            });
+        }
+        const memberRecord = await Student.findById(memberId)
+            .populate('assignedHostel assignedBunk reservedBy')
+            .populate({
+            path: 'assignedRoom',
+            select: 'roomNumber floor capacity currentOccupants status hostel',
+        })
+            .populate({
+            path: 'roommates',
+            select: '_id',
+        });
+        const member = await reconcileStudentReservationState(memberRecord);
+        if (!member) {
+            return res.status(404).json({
+                success: false,
+                message: 'Friend not found',
+            });
+        }
+        if (!member.assignedRoom || String(member.assignedRoom?._id || member.assignedRoom) !== String(student.assignedRoom?._id || student.assignedRoom)) {
+            return res.status(400).json({
+                success: false,
+                message: `${member.firstName} ${member.lastName} is no longer assigned to this room`,
+            });
+        }
+        const memberReservedBy = member.reservedBy?._id || member.reservedBy;
+        if (!memberReservedBy || String(memberReservedBy) !== String(inviterId)) {
+            return res.status(403).json({
+                success: false,
+                message: 'You can only remove friends you invited to this room',
+            });
+        }
+        if (member.reservationStatus !== 'temporary') {
+            return res.status(400).json({
+                success: false,
+                message: `${member.firstName} ${member.lastName} has already approved this room and cannot be removed`,
+            });
+        }
+        const roomId = member.assignedRoom?._id || member.assignedRoom;
+        const hostelId = member.assignedHostel?._id || member.assignedHostel;
+        const bunkId = member.assignedBunk?._id || member.assignedBunk;
+        const notes = 'Invitation withdrawn by the reservation owner before approval';
+        const inviterName = getStudentDisplayName(student, 'Your friend');
+        const roomLabel = member.assignedRoom?.roomNumber && member.assignedHostel?.name
+            ? `Room ${member.assignedRoom.roomNumber} in ${member.assignedHostel.name}`
+            : member.assignedRoom?.roomNumber
+                ? `Room ${member.assignedRoom.roomNumber}`
+                : member.assignedHostel?.name || 'the reserved room';
+        const removalMessage = `${inviterName} withdrew your pending invitation for ${roomLabel}.`;
+        await Promise.allSettled([
+            invitationAuditService.logInvitationOutcome({
+                invitee: member,
+                inviter: student,
+                actor: student._id,
+                action: 'rejected',
+                room: roomId,
+                hostel: hostelId,
+                bunk: bunkId,
+                notes,
+            }),
+        ]);
+        await releaseStudentReservationState(member, {
+            finalStatus: 'none',
+            notifyInviter: false,
+            notes,
+        });
+        await Student.updateOne({ _id: student._id }, { $pull: { roommates: member._id } });
+        await Promise.allSettled([
+            notificationService.sendStudentCustomNotification(member._id, {
+                title: 'Room Invitation Withdrawn',
+                message: removalMessage,
+                destination: '/student/reservation?focus=history',
+                preferenceKey: 'invitationUpdates',
+                type: 'info',
+                forceEmail: true,
+                emailSubject: 'Room Invitation Withdrawn - StayHub',
+                actionLabel: 'View Invitation History',
+            }),
+        ]);
+        cacheService.del(cacheService.cacheKeys.availableRooms(student.level));
+        return res.status(200).json({
+            success: true,
+            message: `${member.firstName} ${member.lastName} was removed from this room invitation`,
+            data: {
+                removedMemberId: member._id,
+            },
+        });
+    }
+    catch (error) {
+        console.error('Remove group member error:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to remove friend from room invitation',
         });
     }
 };

@@ -114,7 +114,7 @@ const resolveAudienceConfig = async (payload = {}) => {
     }
     if (scope === 'level') {
         const level = parseInt(payload.level, 10);
-        if (![100, 200, 300, 400, 500].includes(level)) {
+        if (![100, 200, 300, 400, 500, 600].includes(level)) {
             throw new Error('A valid level is required');
         }
         query.level = level;
@@ -955,10 +955,10 @@ exports.createHostel = async (req, res) => {
                 message: 'Level is required'
             });
         }
-        if (![100, 200, 300, 400, 500].includes(Number(level))) {
+        if (![100, 200, 300, 400, 500, 600].includes(Number(level))) {
             return res.status(400).json({
                 success: false,
-                message: 'Level must be 100, 200, 300, 400, or 500'
+                message: 'Level must be 100, 200, 300, 400, 500, or 600'
             });
         }
         if (!gender) {
@@ -1163,10 +1163,10 @@ exports.updateHostel = async (req, res) => {
                 });
             }
         }
-        if (updateData.level && ![100, 200, 300, 400, 500].includes(Number(updateData.level))) {
+        if (updateData.level && ![100, 200, 300, 400, 500, 600].includes(Number(updateData.level))) {
             return res.status(400).json({
                 success: false,
-                message: 'Level must be 100, 200, 300, 400, or 500'
+                message: 'Level must be 100, 200, 300, 400, 500, or 600'
             });
         }
         if (updateData.gender && !['male', 'female', 'mixed'].includes(updateData.gender.toLowerCase())) {

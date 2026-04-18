@@ -1,32 +1,86 @@
-const nodemailer = require('nodemailer');
+const { BrevoClient } = require('@getbrevo/brevo');
 const config = require('../config/env');
+
+const BREVO_API_KEY_PREFIX = 'xkeysib-';
+const BREVO_SMTP_KEY_PREFIX = 'xsmtpsib-';
+
 const parseSender = () => {
-    const from = config.EMAIL_FROM || 'StayHub <adebowale235@gmail.com>';
+    const from = config.EMAIL_FROM || 'StayHub <no-reply@stayhub.local>';
     const match = from.match(/^(.*?)\s*<(.+)>$/);
     if (match) {
         return { name: match[1].trim(), email: match[2].trim() };
     }
     return { name: 'StayHub', email: from.trim() };
 };
+
 const sender = parseSender();
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: config.GMAIL_USER,
-        pass: config.GMAIL_APP_PASSWORD,
-    },
-});
+
+const resolveBrevoApiKey = () => {
+    const key = String(config.BREVO_API_KEY || '').trim();
+    if (!key) {
+        throw new Error('BREVO_API_KEY is not configured');
+    }
+
+    if (key.startsWith(BREVO_API_KEY_PREFIX)) {
+        return key;
+    }
+
+    if (key.startsWith(BREVO_SMTP_KEY_PREFIX)) {
+        throw new Error('BREVO_API_KEY is using an SMTP key (xsmtpsib). Use a Brevo API key (xkeysib) for Brevo SDK delivery.');
+    }
+
+    throw new Error('BREVO_API_KEY appears invalid. Expected a Brevo API key (xkeysib-).');
+};
+
+const getBrevoClient = () => new BrevoClient({ apiKey: resolveBrevoApiKey() });
+
+const normalizeRecipients = (to) => {
+    if (!to) {
+        return [];
+    }
+
+    if (Array.isArray(to)) {
+        return to.flatMap((recipient) => normalizeRecipients(recipient));
+    }
+
+    if (typeof to === 'string') {
+        return to
+            .split(',')
+            .map((email) => email.trim())
+            .filter(Boolean)
+            .map((email) => ({ email }));
+    }
+
+    if (typeof to === 'object' && to.email) {
+        return [{ email: to.email, name: to.name }];
+    }
+
+    return [];
+};
+
 const sendEmail = async (options) => {
     try {
-        const result = await transporter.sendMail({
-            from: `"${sender.name}" <${sender.email}>`,
-            to: options.to,
+        const recipients = normalizeRecipients(options.to);
+        if (recipients.length === 0) {
+            throw new Error('No valid recipient email address provided');
+        }
+
+        const brevoClient = getBrevoClient();
+
+        const result = await brevoClient.transactionalEmails.sendTransacEmail({
+            sender: {
+                name: sender.name,
+                email: sender.email,
+            },
+            to: recipients,
             subject: options.subject,
-            html: options.html,
-            text: options.text,
+            htmlContent: options.html,
+            textContent: options.text,
         });
-        console.log('Email sent:', result.messageId);
-        return { success: true, messageId: result.messageId };
+
+        const messageId = result?.messageId || result?.messageIds?.[0] || null;
+        console.log('Email sent via Brevo:', messageId || 'sent');
+        return { success: true, messageId };
     }
     catch (error) {
         console.error('Error sending email:', error);

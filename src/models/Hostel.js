@@ -8,7 +8,7 @@ const hostelSchema = new mongoose.Schema({
     level: {
         type: Number,
         required: true,
-        enum: [100, 200, 300, 400, 500],
+        enum: [100, 200, 300, 400, 500, 600],
     },
     gender: {
         type: String,

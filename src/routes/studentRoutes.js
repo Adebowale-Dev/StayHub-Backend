@@ -33,6 +33,7 @@ router.get('/reservation', studentController.getReservation);
 router.post('/reservation/invite-preview', studentController.previewReservationInvite);
 router.post('/reservation/respond', studentController.respondToReservationInvite);
 router.post('/reservation/members', studentController.addGroupMembers);
+router.delete('/reservation/members/:memberId', studentController.removeGroupMember);
 router.patch('/reservations/:reservationId/members', studentController.addGroupMembers);
 router.get('/payment/amount', paymentController.getPaymentAmount);
 router.get('/payment/status', paymentController.getPaymentStatus);

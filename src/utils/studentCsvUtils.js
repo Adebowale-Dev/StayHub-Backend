@@ -3,7 +3,7 @@ const College = require('../models/College');
 const Department = require('../models/Department');
 const { generateDefaultPassword } = require('./passwordUtils');
 
-const ALLOWED_LEVELS = new Set([100, 200, 300, 400, 500]);
+const ALLOWED_LEVELS = new Set([100, 200, 300, 400, 500, 600]);
 const ALLOWED_GENDERS = new Set(['male', 'female']);
 
 const STUDENT_IMPORT_TEMPLATE_HEADERS = [
@@ -153,7 +153,7 @@ const parseStudentImportRow = async (row) => {
     }
 
     if (!ALLOWED_LEVELS.has(level)) {
-        throw new Error('Level must be one of 100, 200, 300, 400, or 500');
+        throw new Error('Level must be one of 100, 200, 300, 400, 500, or 600');
     }
 
     if (!ALLOWED_GENDERS.has(gender)) {
